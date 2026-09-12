@@ -1,0 +1,35 @@
+--=====================================================================
+-- GoldenGate Extract parameter file
+-- Captures committed changes from the source PDB (OLTP) for the order
+-- management schema (SRS §2, §96, enterprise DR/replication layer).
+-- Apply on the source GGSCI host:
+--   ADD EXTRACT ext_oltp, EXTTRAIL /u01/ggate/ dirdat, EXTRACT ext_oltp, PARAMGROUP ext_oltp
+--=====================================================================
+EXTRACT EXT_OLTP
+USERID gg_owner, PASSWORD <managed_by_ggsci_cred_store>
+REPORTCOUNT EVERY 5 MINUTES, LOGONLY
+SETENV (NLS_LANG = "AMERICAN_AMERICA.AL32UTF8")
+
+-- Capture from the PDB containing the OLTP schema (APP_OWNER)
+SOURCEDEFS ./dirdefs/*.def
+
+-- Tables to capture (tenant-aware OLTP tables, SRS §96)
+TABLE APP_OWNER.TENANT;
+TABLE APP_OWNER.CUSTOMER;
+TABLE APP_OWNER.CUSTOMER_ADDRESS;
+TABLE APP_OWNER.CUSTOMER_ACCOUNT;
+TABLE APP_OWNER.PRODUCT_CATEGORY;
+TABLE APP_OWNER.PRODUCT;
+TABLE APP_OWNER.WAREHOUSE;
+TABLE APP_OWNER.INVENTORY;
+TABLE APP_OWNER.SALES_ORDER;
+TABLE APP_OWNER.SALES_ORDER_LINE;
+TABLE APP_OWNER.PAYMENT;
+TABLE APP_OWNER.OUTBOX_EVENT;
+TABLE APP_OWNER.IDEMPOTENCY_KEY;
+TABLE APP_OWNER.AUDIT_LOG;
+
+-- Capture committed transactions only
+GETTRUNCATES
+NOUNTRUNCATEDUPDATES
+FETCHOPTIONS USESNAPSHOT

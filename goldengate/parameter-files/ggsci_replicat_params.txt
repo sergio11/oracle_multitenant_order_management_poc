@@ -1,0 +1,25 @@
+--=====================================================================
+-- GoldenGate Replicat parameter file
+-- Replays captured OLTP changes into the target PDB (Reporting/DR site,
+-- SRS §2, §96). Maps source APP_OWNER objects to the same schema on the
+-- target. Uses COMMIT_SERIALIZATION PARTIAL for throughput while keeping
+-- transactional consistency per table group.
+--=====================================================================
+REPLICAT REP_OLTP
+USERID gg_owner, PASSWORD <managed_by_ggsci_cred_store>
+REPORTCOUNT EVERY 5 MINUTES, LOGONLY
+SETENV (NLS_LANG = "AMERICAN_AMERICA.AL32UTF8")
+
+-- Source/target connection (target defined via ADD REPLICAT)
+ASSUMETARGETDEFS ./dirdefs/*.def
+
+-- Default is to apply all tables from the extract source
+MAP APP_OWNER.*, TARGET APP_OWNER.*;
+
+-- Apply in commit order; partial serialization for throughput (SRS §96)
+COMMIT_SERIALIZATION PARTIAL
+GROUPXACTS WRITEBYTABLE
+
+-- Handle collisions: on the DR target prefer applying the source (last win)
+HANDLECOLLISIONS
+REPERROR (DEFAULT, ABEND)
