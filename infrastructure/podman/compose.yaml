@@ -1,0 +1,50 @@
+# Podman Compose for local Oracle Lab (POC)
+#
+# Reproduces the local MVP:
+#   Spring Boot (external) -> Oracle Free -> CDB1 -> PDB_OLTP
+#
+# Usage:
+#   cp .env.example .env   # fill in secrets locally
+#   podman compose up -d
+#
+# IMPORTANT: This is the LOCAL lab. RAC / ASM / Data Guard / GoldenGate
+# remain enterprise target architecture (see SRS §86-87).
+
+name: poc-oracle
+
+networks:
+  poc_oracle_net:
+    name: poc_oracle_net
+    driver: bridge
+
+volumes:
+  oracle-data:
+    name: poc_oracle_data
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: poc-oracle
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ORACLE_SID: ${ORACLE_SID:-CDB1}
+      ORACLE_PDB: ${ORACLE_PDB:-PDB_OLTP}
+      ORACLE_PWD: ${ORACLE_PWD:-ChangeMe123!}
+    ports:
+      - "${ORACLE_LISTENER_PORT:-1521}:1521"
+      - "${ORACLE_HTTP_PORT:-8080}:8080"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      # Bind-mount local scripts so gvenzl/oracle-free executes them on
+      # first startup (creates APP_OWNER / APP_RUNTIME / APP_REPORTING).
+      - ./scripts:/opt/oracle/scripts/setup
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1 FROM dual;' | sqlplus -s system/$${ORACLE_PWD}@//localhost:1521/$${ORACLE_PDB} > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - poc_oracle_net
