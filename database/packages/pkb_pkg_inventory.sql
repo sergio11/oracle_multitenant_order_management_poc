@@ -1,0 +1,157 @@
+--=====================================================================
+-- PKG_INVENTORY - Package body
+--
+-- Implements inventory operations (SRS 34).
+-- RESERVE_STOCK uses SELECT ... FOR UPDATE to lock the inventory row,
+-- guaranteeing no overselling under concurrency (SRS 31, FT-003).
+-- All check constraints on INVENTORY prevent negative quantities.
+--=====================================================================
+CREATE OR REPLACE PACKAGE BODY pkg_inventory AS
+
+    --=================================================================
+    -- get_available_stock
+    --=================================================================
+    FUNCTION get_available_stock(
+        p_tenant_id    IN NUMBER,
+        p_warehouse_id IN NUMBER,
+        p_product_id   IN NUMBER
+    ) RETURN NUMBER IS
+        v_qty NUMBER;
+    BEGIN
+        SELECT available_quantity
+          INTO v_qty
+          FROM inventory
+         WHERE tenant_id    = p_tenant_id
+           AND warehouse_id = p_warehouse_id
+           AND product_id   = p_product_id;
+
+        RETURN v_qty;
+
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 0;
+    END get_available_stock;
+
+    --=================================================================
+    -- reserve_stock
+    -- Atomic reservation with row lock (SELECT ... FOR UPDATE).
+    --=================================================================
+    PROCEDURE reserve_stock(
+        p_tenant_id    IN NUMBER,
+        p_warehouse_id IN NUMBER,
+        p_product_id   IN NUMBER,
+        p_quantity     IN NUMBER
+    ) IS
+        v_available NUMBER;
+        v_inventory_id NUMBER;
+    BEGIN
+        IF p_quantity <= 0 THEN
+            RAISE_APPLICATION_ERROR(-20010, 'Reservation quantity must be positive.');
+        END IF;
+
+        -- Lock the inventory row for this tenant/warehouse/product.
+        SELECT inventory_id, available_quantity
+          INTO v_inventory_id, v_available
+          FROM inventory
+         WHERE tenant_id    = p_tenant_id
+           AND warehouse_id = p_warehouse_id
+           AND product_id   = p_product_id
+           FOR UPDATE;
+
+        -- Guard against overselling (SRS 31, FR-010).
+        IF v_available < p_quantity THEN
+            RAISE_APPLICATION_ERROR(-20011, 'INSUFFICIENT_INVENTORY for product ' || p_product_id);
+        END IF;
+
+        -- Atomic decrement/increment + optimistic version bump.
+        UPDATE inventory
+           SET available_quantity = available_quantity - p_quantity,
+               reserved_quantity  = reserved_quantity  + p_quantity,
+               version            = version + 1,
+               updated_at         = SYSTIMESTAMP
+         WHERE inventory_id = v_inventory_id;
+
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20012, 'Inventory row not found for product ' || p_product_id);
+    END reserve_stock;
+
+    --=================================================================
+    -- release_stock
+    --=================================================================
+    PROCEDURE release_stock(
+        p_tenant_id    IN NUMBER,
+        p_warehouse_id IN NUMBER,
+        p_product_id   IN NUMBER,
+        p_quantity     IN NUMBER
+    ) IS
+        v_reserved NUMBER;
+        v_inventory_id NUMBER;
+    BEGIN
+        IF p_quantity <= 0 THEN
+            RAISE_APPLICATION_ERROR(-20013, 'Release quantity must be positive.');
+        END IF;
+
+        SELECT inventory_id, reserved_quantity
+          INTO v_inventory_id, v_reserved
+          FROM inventory
+         WHERE tenant_id    = p_tenant_id
+           AND warehouse_id = p_warehouse_id
+           AND product_id   = p_product_id
+           FOR UPDATE;
+
+        IF v_reserved < p_quantity THEN
+            RAISE_APPLICATION_ERROR(-20014, 'Reserved quantity insufficient for release.');
+        END IF;
+
+        UPDATE inventory
+           SET available_quantity = available_quantity + p_quantity,
+               reserved_quantity  = reserved_quantity  - p_quantity,
+               version            = version + 1,
+               updated_at         = SYSTIMESTAMP
+         WHERE inventory_id = v_inventory_id;
+
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20012, 'Inventory row not found for product ' || p_product_id);
+    END release_stock;
+
+    --=================================================================
+    -- adjust_stock
+    --=================================================================
+    PROCEDURE adjust_stock(
+        p_tenant_id    IN NUMBER,
+        p_warehouse_id IN NUMBER,
+        p_product_id   IN NUMBER,
+        p_quantity     IN NUMBER
+    ) IS
+    BEGIN
+        UPDATE inventory
+           SET available_quantity = p_quantity,
+               version            = version + 1,
+               updated_at         = SYSTIMESTAMP
+         WHERE tenant_id    = p_tenant_id
+           AND warehouse_id = p_warehouse_id
+           AND product_id   = p_product_id;
+
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20012, 'Inventory row not found for product ' || p_product_id);
+        END IF;
+    END adjust_stock;
+
+END pkg_inventory;
+/
+
+-- Grant execute to runtime user (least privilege, SRS 58/59)
+GRANT EXECUTE ON pkg_inventory TO app_runtime;
+GRANT EXECUTE ON pkg_inventory TO app_reporting;
+</content>
+<task_progress>
+- [x] FASE 1-3 completadas
+- [x] FASE 4: PKG_TENANT + PKG_AUDIT (spec + body)
+- [x] FASE 4: PKG_INVENTORY spec
+- [x] FASE 4: PKG_INVENTORY body
+- [ ] FASE 4: PKG_ORDER_MANAGEMENT (spec + body)
+- [ ] FASE 4: Commit fase 4
+- [ ] FASE 5 a 12 (resto del plan)
+</task_progress>
