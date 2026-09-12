@@ -2,10 +2,16 @@ package com.enterpriseorders.backend.order;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.TenantContext;
+import org.slf4j.MDC;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Types;
 
 /**
  * Order lifecycle service (SRS §33, §53, §96).
@@ -14,19 +20,21 @@ import java.math.BigDecimal;
  * delegating the atomic DB operations to the PL/SQL packages via
  * OrderDao. Sensitive operations (confirm, pay) implement idempotency
  * via the Idempotency-Key (FR-014, SRS §62, FT-004).
- *
- * The tenant id always comes from TenantContext, never from the request
- * body (SRS §13).
  */
 @Service
 public class OrderService {
 
+    private final JdbcTemplate jdbcTemplate;
     private final OrderDao orderDao;
     private final IdempotencyDao idempotencyDao;
+    private final OutboxDao outboxDao;
 
-    public OrderService(OrderDao orderDao, IdempotencyDao idempotencyDao) {
+    public OrderService(JdbcTemplate jdbcTemplate, OrderDao orderDao,
+                        IdempotencyDao idempotencyDao, OutboxDao outboxDao) {
+        this.jdbcTemplate = jdbcTemplate;
         this.orderDao = orderDao;
         this.idempotencyDao = idempotencyDao;
+        this.outboxDao = outboxDao;
     }
 
     @Transactional
@@ -46,6 +54,8 @@ public class OrderService {
     /**
      * Confirms an order. Idempotent: repeats with the same Idempotency-Key
      * return the existing result without double-reserving inventory (FR-014).
+     * Also publishes an ORDER_CONFIRMED event to the transactional outbox
+     * (SRS §63, BR-011).
      */
     @Transactional
     public OrderResponse confirmOrder(Long orderId, String idempotencyKey) {
@@ -66,6 +76,11 @@ public class OrderService {
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             idempotencyDao.insertIfAbsent(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId);
         }
+
+        // Publish ORDER_CONFIRMED to the transactional outbox (SRS §63)
+        String correlationId = MDC.get("correlationId");
+        String payload = "{\"orderId\":" + orderId + ",\"actor\":\"APP_JAVA\"}";
+        outboxDao.writeEvent(tenantId, "ORDER_CONFIRMED", payload, correlationId);
 
         return orderDao.findOrder(tenantId, orderId);
     }
@@ -110,12 +125,3 @@ public class OrderService {
         return orderDao.findOrder(TenantContext.getTenantId(), orderId);
     }
 }
-</content>
-<task_progress>
-- [x] FASE 7: OrderDao + DTOs + Migración V012 + IdempotencyDao
-- [x] FASE 7: OrderService (con idempotencia en confirm/pay)
-- [ ] FASE 7: Añadir findOrder a OrderDao
-- [ ] FASE 7: OrderController (REST endpoints)
-- [ ] FASE 7: Commit fase 7
-- [ ] FASE 8 a 12 (resto del plan)
-</task_progress>
