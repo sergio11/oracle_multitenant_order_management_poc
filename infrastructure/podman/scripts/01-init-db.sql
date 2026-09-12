@@ -32,20 +32,60 @@ GRANT CREATE ANY CONTEXT TO app_owner;
 
 --=====================================================================
 -- APP_RUNTIME : used by the Spring Boot application at runtime.
--- Least privilege: DML/query only against APP_OWNER objects.
+-- Least privilege: SELECT on tables/MVs/sequences + EXECUTE on packages.
 -- No DDL, no DBA. ORA-00942 surfaces if objects are absent.
 --=====================================================================
 CREATE USER app_runtime IDENTIFIED BY "ChangeMe123!";
 GRANT CREATE SESSION TO app_runtime;
+-- Read access on OLTP tables (SRS 58)
+GRANT SELECT ON tenant TO app_runtime;
+GRANT SELECT ON customer TO app_runtime;
+GRANT SELECT ON customer_address TO app_runtime;
+GRANT SELECT ON customer_account TO app_runtime;
+GRANT SELECT ON product_category TO app_runtime;
+GRANT SELECT ON product TO app_runtime;
+GRANT SELECT ON warehouse TO app_runtime;
+GRANT SELECT ON inventory TO app_runtime;
+GRANT SELECT ON sales_order TO app_runtime;
+GRANT SELECT ON sales_order_line TO app_runtime;
+GRANT SELECT ON order_status_history TO app_runtime;
+GRANT SELECT ON payment TO app_runtime;
+GRANT SELECT ON outbox_event TO app_runtime;
+GRANT SELECT ON idempotency_key TO app_runtime;
+GRANT SELECT ON audit_log TO app_runtime;
+GRANT SELECT ON mv_order_daily_summary TO app_runtime;
+GRANT SELECT ON mv_product_sales_summary TO app_runtime;
+-- Sequences for inserts (provisioning endpoints, SRS 58)
+GRANT SELECT ON seq_tenant_id TO app_runtime;
+GRANT SELECT ON seq_customer_id TO app_runtime;
+GRANT SELECT ON seq_product_id TO app_runtime;
+GRANT SELECT ON seq_warehouse_id TO app_runtime;
+GRANT SELECT ON seq_order_id TO app_runtime;
+GRANT SELECT ON seq_order_line_id TO app_runtime;
+GRANT SELECT ON seq_payment_id TO app_runtime;
+GRANT SELECT ON seq_inventory_id TO app_runtime;
+GRANT SELECT ON seq_audit_id TO app_runtime;
+GRANT SELECT ON seq_outbox_id TO app_runtime;
+GRANT SELECT ON seq_idempotency_id TO app_runtime;
+-- Execute on PL/SQL packages (SRS 32, business logic close to the data)
+GRANT EXECUTE ON pkg_tenant TO app_runtime;
+GRANT EXECUTE ON pkg_order_management TO app_runtime;
+GRANT EXECUTE ON pkg_inventory TO app_runtime;
+GRANT EXECUTE ON pkg_audit TO app_runtime;
+GRANT EXECUTE ON pkg_vpd TO app_runtime;
+-- Inserts on outbox (Transactional Outbox, SRS 63)
+GRANT INSERT, UPDATE ON outbox_event TO app_runtime;
 
 --=====================================================================
 -- APP_REPORTING : read-only reporting user (reporting workload).
 --=====================================================================
 CREATE USER app_reporting IDENTIFIED BY "ChangeMe123!";
 GRANT CREATE SESSION TO app_reporting;
-
---=====================================================================
--- NOTE: Application context (app_ctx) + VPD policies + package grants
--- are added in later phases (Multi-Tenancy/VPD, Business Logic).
--- This keeps Phase 1 focused on the reproducible container foundation.
---=====================================================================
+GRANT SELECT ON mv_order_daily_summary TO app_reporting;
+GRANT SELECT ON mv_product_sales_summary TO app_reporting;
+GRANT SELECT ON tenant TO app_reporting;
+GRANT SELECT ON customer TO app_reporting;
+GRANT SELECT ON product TO app_reporting;
+GRANT SELECT ON sales_order TO app_reporting;
+GRANT SELECT ON sales_order_line TO app_reporting;
+GRANT SELECT ON payment TO app_reporting;
