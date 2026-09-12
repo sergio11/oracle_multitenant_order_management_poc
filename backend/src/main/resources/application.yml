@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: enterprise-order-platform
+  profiles:
+    active: local
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  datasource:
+    # No JPA (SRS 50). JDBC + Oracle UCP configured programmatically
+    # in OracleUcpConfig.
+  flyway:
+    enabled: false
+    locations: classpath:db/migration
+
+oracle:
+  url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/pdb_oltp}
+  username: ${ORACLE_USER:APP_RUNTIME}
+  password: ${ORACLE_PASSWORD:ChangeMe123!}
+  ucp:
+    initial-pool-size: 5
+    min-pool-size: 5
+    max-pool-size: 20
+    connection-wait-timeout: 30
+    inactive-connection-timeout: 300
+    validate-connection-on-borrow: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+</content>
+<task_progress>
+- [x] FASE 6: Oracle UCP config class
+- [x] FASE 6: Clase principal Spring Boot
+- [x] FASE 6: application-local.yml (base con UCP + actuator)
+- [ ] FASE 6: Global error handler
+- [ ] FASE 6: Tenant context (resolver + interceptor)
+- [ ] FASE 6: Módulo Tenant (domain/repository/service/controller)
+- [ ] FASE 6: Commit fase 6
+- [ ] FASE 7 a 12 (resto del plan)
+</task_progress>
