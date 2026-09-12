@@ -26,6 +26,9 @@ GRANT UNLIMITED TABLESPACE TO app_owner;
 GRANT CREATE TABLE, CREATE VIEW, CREATE PROCEDURE, CREATE SEQUENCE,
       CREATE TRIGGER, CREATE MATERIALIZED VIEW, CREATE SYNONYM
   TO app_owner;
+-- Privileges required for multi-tenancy isolation (SRS 14, VPD/DBMS_RLS)
+GRANT EXECUTE ON SYS.DBMS_RLS TO app_owner;
+GRANT CREATE ANY CONTEXT TO app_owner;
 
 --=====================================================================
 -- APP_RUNTIME : used by the Spring Boot application at runtime.
