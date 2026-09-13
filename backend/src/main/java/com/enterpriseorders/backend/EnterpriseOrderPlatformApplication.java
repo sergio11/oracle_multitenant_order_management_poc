@@ -17,13 +17,3 @@ public class EnterpriseOrderPlatformApplication {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 6: Oracle UCP config class
-- [x] FASE 6: Clase principal Spring Boot
-- [ ] FASE 6: application-local.yml + application-test.yml
-- [ ] FASE 6: Global error handler
-- [ ] FASE 6: Tenant context (resolver + interceptor)
-- [ ] FASE 6: Módulo Tenant (domain/repository/service/controller)
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>

@@ -71,6 +71,7 @@ BEGIN
     DBMS_RLS.ADD_POLICY('APP_OWNER','ORDER_STATUS_HISTORY','POL_HISTORY_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
     DBMS_RLS.ADD_POLICY('APP_OWNER','PAYMENT',           'POL_PAYMENT_TENANT', 'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
     DBMS_RLS.ADD_POLICY('APP_OWNER','OUTBOX_EVENT',      'POL_OUTBOX_TENANT',  'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+    DBMS_RLS.ADD_POLICY('APP_OWNER','IDEMPOTENCY_KEY','POL_IDEMP_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
 END;
 /
 
@@ -79,13 +80,3 @@ END;
 --=====================================================================
 GRANT EXECUTE ON pkg_vpd TO app_runtime;
 GRANT EXECUTE ON pkg_vpd TO app_reporting;
-</content>
-<task_progress>
-- [x] FASE 1-4 completadas (f47859d, dded060, d3bd043, 3728f65)
-- [x] FASE 5: PKG_VPD spec + body
-- [x] FASE 5: apply_vpd_policies.sql (DBMS_RLS)
-- [x] FASE 5: Migración V011 (VPD reproducible vía Flyway)
-- [ ] FASE 5: Actualizar 01-init-db.sql (grant DBMS_RLS + CREATE ANY CONTEXT)
-- [ ] FASE 5: Commit fase 5
-- [ ] FASE 6 a 12 (resto del plan)
-</task_progress>

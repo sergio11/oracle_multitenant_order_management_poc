@@ -157,6 +157,14 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
 
     --=================================================================
     -- add_order_line
+    --
+    -- NOTE on p_warehouse_id: This parameter is accepted for API
+    -- compatibility but is NOT stored on the order line. The warehouse
+    -- resolution happens at confirm_order time, which picks the first
+    -- active warehouse for the tenant. This keeps the add_line
+    -- operation lightweight and avoids coupling line creation to
+    -- warehouse selection. See confirm_order for the actual inventory
+    -- reservation logic.
     --=================================================================
     PROCEDURE add_order_line(
         p_tenant_id    IN NUMBER,
@@ -257,7 +265,11 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             RAISE_APPLICATION_ERROR(-20026, 'Order has no lines - cannot confirm.');
         END IF;
 
-        -- Resolve default warehouse for the tenant (use first active)
+        -- Resolve warehouse for inventory reservation.
+        -- Design decision: use the first active warehouse for the tenant
+        -- rather than per-line warehouse. The p_warehouse_id parameter
+        -- in add_order_line is reserved for future multi-warehouse support.
+        -- See SRS §37 for inventory reservation requirements.
         SELECT warehouse_id INTO v_warehouse_id
           FROM warehouse
          WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
@@ -434,12 +446,3 @@ END pkg_order_management;
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
 GRANT EXECUTE ON pkg_order_management TO app_reporting;
 </content>
-<task_progress>
-- [x] FASE 1-3 completadas
-- [x] FASE 4: PKG_TENANT + PKG_AUDIT + PKG_INVENTORY (spec + body)
-- [x] FASE 4: PKG_ORDER_MANAGEMENT spec
-- [x] FASE 4: PKG_ORDER_MANAGEMENT body
-- [ ] FASE 4: Crear secuencia tenant_ord_seq (referenciada en body)
-- [ ] FASE 4: Commit fase 4
-- [ ] FASE 5 a 12 (resto del plan)
-</task_progress>

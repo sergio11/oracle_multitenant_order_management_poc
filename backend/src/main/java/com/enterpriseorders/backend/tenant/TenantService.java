@@ -97,11 +97,3 @@ public class TenantService {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 6: infraestructura backend base + TenantAwareDataSource + filtros + DTOs
-- [x] FASE 6: TenantService (invoca PL/SQL pkg_tenant vía JDBC, @Transactional)
-- [ ] FASE 6: TenantController (endpoints /api/v1/tenants)
-- [ ] FASE 6: application-test.yml
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>

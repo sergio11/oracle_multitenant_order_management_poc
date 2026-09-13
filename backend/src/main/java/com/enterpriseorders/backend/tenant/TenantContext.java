@@ -28,11 +28,3 @@ public final class TenantContext {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 6: infraestructura backend base (UCP, yaml, filtros, errores)
-- [x] FASE 6: TenantContext (ThreadLocal)
-- [ ] FASE 6: TenantContextFilter (resuelve y setea tenant + contexto Oracle)
-- [ ] FASE 6: TenantDao (JDBC) + TenantService + TenantController
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>

@@ -2,7 +2,6 @@ package com.enterpriseorders.backend.order;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.TenantContext;
-import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,14 +26,12 @@ public class OrderService {
     private final JdbcTemplate jdbcTemplate;
     private final OrderDao orderDao;
     private final IdempotencyDao idempotencyDao;
-    private final OutboxDao outboxDao;
 
     public OrderService(JdbcTemplate jdbcTemplate, OrderDao orderDao,
-                        IdempotencyDao idempotencyDao, OutboxDao outboxDao) {
+                        IdempotencyDao idempotencyDao) {
         this.jdbcTemplate = jdbcTemplate;
         this.orderDao = orderDao;
         this.idempotencyDao = idempotencyDao;
-        this.outboxDao = outboxDao;
     }
 
     @Transactional
@@ -76,11 +73,6 @@ public class OrderService {
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             idempotencyDao.insertIfAbsent(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId);
         }
-
-        // Publish ORDER_CONFIRMED to the transactional outbox (SRS §63)
-        String correlationId = MDC.get("correlationId");
-        String payload = "{\"orderId\":" + orderId + ",\"actor\":\"APP_JAVA\"}";
-        outboxDao.writeEvent(tenantId, "ORDER_CONFIRMED", payload, correlationId);
 
         return orderDao.findOrder(tenantId, orderId);
     }

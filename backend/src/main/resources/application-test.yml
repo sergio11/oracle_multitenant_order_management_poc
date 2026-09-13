@@ -21,10 +21,3 @@ management:
       exposure:
         include: health,info,metrics,prometheus
 </content>
-<task_progress>
-- [x] FASE 6: infraestructura backend base + TenantAwareDataSource + filtros + DTOs + TenantService + TenantController
-- [x] FASE 6: application-test.yml
-- [ ] FASE 6: Dockerfile backend
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>

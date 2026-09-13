@@ -159,11 +159,3 @@ CREATE OR REPLACE PACKAGE pkg_order_management AS
 END pkg_order_management;
 /
 </content>
-<task_progress>
-- [x] FASE 1-3 completadas
-- [x] FASE 4: PKG_TENANT + PKG_AUDIT + PKG_INVENTORY + PKG_ORDER_MANAGEMENT (spec + body)
-- [x] FASE 4: V010 corregida (secuencia + specs, migración Flyway válida)
-- [ ] FASE 4: Crear deploy_packages.sql (bodies + grants)
-- [ ] FASE 4: Commit fase 4
-- [ ] FASE 5 a 12 (resto del plan)
-</task_progress>

@@ -139,6 +139,29 @@ CREATE OR REPLACE PACKAGE BODY pkg_inventory AS
         END IF;
     END adjust_stock;
 
+    --=================================================================
+    -- set_test_stock: test helper for concurrency tests
+    --=================================================================
+    PROCEDURE set_test_stock(
+        p_tenant_id    IN NUMBER,
+        p_product_id   IN NUMBER,
+        p_warehouse_id IN NUMBER,
+        p_qty          IN NUMBER
+    ) IS
+    BEGIN
+        UPDATE inventory
+           SET available_quantity = p_qty,
+               reserved_quantity  = 0,
+               version           = version + 1
+         WHERE tenant_id    = p_tenant_id
+           AND product_id   = p_product_id
+           AND warehouse_id = p_warehouse_id;
+
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20030, 'Inventory record not found for test stock update');
+        END IF;
+    END set_test_stock;
+
 END pkg_inventory;
 /
 
@@ -146,12 +169,3 @@ END pkg_inventory;
 GRANT EXECUTE ON pkg_inventory TO app_runtime;
 GRANT EXECUTE ON pkg_inventory TO app_reporting;
 </content>
-<task_progress>
-- [x] FASE 1-3 completadas
-- [x] FASE 4: PKG_TENANT + PKG_AUDIT (spec + body)
-- [x] FASE 4: PKG_INVENTORY spec
-- [x] FASE 4: PKG_INVENTORY body
-- [ ] FASE 4: PKG_ORDER_MANAGEMENT (spec + body)
-- [ ] FASE 4: Commit fase 4
-- [ ] FASE 5 a 12 (resto del plan)
-</task_progress>

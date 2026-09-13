@@ -97,10 +97,3 @@ public class ReportingDao {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 8: Migración V013 (materialized views)
-- [x] FASE 8: ReportingDao (consulta MVs + refresh on demand)
-- [ ] FASE 8: ReportingController (endpoints /api/v1/reports)
-- [ ] FASE 8: Commit fase 8
-- [ ] FASE 9 a 12 (resto del plan)
-</task_progress>

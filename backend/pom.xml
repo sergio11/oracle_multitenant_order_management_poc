@@ -105,13 +105,3 @@
     </build>
 
 </project>
-</｜DSML｜>
-<task_progress>
-- [x] FASE 1: Infraestructura Oracle en Podman (commit f47859d)
-- [ ] FASE 2: Crear backend/pom.xml (Flyway plugin + dependencias)
-- [ ] FASE 2: Crear migraciones V001-V009 (tablas del dominio)
-- [ ] FASE 2: Crear migración de índices y constraints
-- [ ] FASE 2: Commit fase 2
-- [ ] FASE 3 a 12 (resto del plan)
-</task_progress>
-</write_to_file>

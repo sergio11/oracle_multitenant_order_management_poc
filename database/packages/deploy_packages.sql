@@ -37,11 +37,3 @@ GRANT EXECUTE ON pkg_order_management TO app_reporting;
 
 PROMPT Packages deployed successfully.
 </content>
-<task_progress>
-- [x] FASE 1-3 completadas
-- [x] FASE 4: PKG_TENANT + PKG_AUDIT + PKG_INVENTORY + PKG_ORDER_MANAGEMENT (spec + body)
-- [x] FASE 4: V010 corregida (secuencia + specs, migración Flyway válida)
-- [x] FASE 4: deploy_packages.sql (bodies + context + grants)
-- [ ] FASE 4: Commit fase 4
-- [ ] FASE 5 a 12 (resto del plan)
-</task_progress>

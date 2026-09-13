@@ -72,11 +72,3 @@ GRANT SELECT ON mv_product_sales_summary TO app_reporting;
 GRANT SELECT ON mv_order_daily_summary   TO app_runtime;
 GRANT SELECT ON mv_product_sales_summary TO app_runtime;
 </content>
-<task_progress>
-- [x] FASE 1-7 completadas (7 commits)
-- [x] FASE 8: Migración V013 (MV_ORDER_DAILY_SUMMARY + MV_PRODUCT_SALES_SUMMARY)
-- [ ] FASE 8: ReportingDao (consulta MVs + refresh)
-- [ ] FASE 8: ReportingController (endpoints /api/v1/reports)
-- [ ] FASE 8: Commit fase 8
-- [ ] FASE 9 a 12 (resto del plan)
-</task_progress>

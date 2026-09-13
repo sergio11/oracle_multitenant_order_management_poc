@@ -52,21 +52,9 @@ GRANT SELECT ON order_status_history TO app_runtime;
 GRANT SELECT ON payment TO app_runtime;
 GRANT SELECT ON outbox_event TO app_runtime;
 GRANT SELECT ON idempotency_key TO app_runtime;
-GRANT SELECT ON audit_log TO app_runtime;
+GRANT SELECT ON audit_event TO app_runtime;
 GRANT SELECT ON mv_order_daily_summary TO app_runtime;
 GRANT SELECT ON mv_product_sales_summary TO app_runtime;
--- Sequences for inserts (provisioning endpoints, SRS 58)
-GRANT SELECT ON seq_tenant_id TO app_runtime;
-GRANT SELECT ON seq_customer_id TO app_runtime;
-GRANT SELECT ON seq_product_id TO app_runtime;
-GRANT SELECT ON seq_warehouse_id TO app_runtime;
-GRANT SELECT ON seq_order_id TO app_runtime;
-GRANT SELECT ON seq_order_line_id TO app_runtime;
-GRANT SELECT ON seq_payment_id TO app_runtime;
-GRANT SELECT ON seq_inventory_id TO app_runtime;
-GRANT SELECT ON seq_audit_id TO app_runtime;
-GRANT SELECT ON seq_outbox_id TO app_runtime;
-GRANT SELECT ON seq_idempotency_id TO app_runtime;
 -- Execute on PL/SQL packages (SRS 32, business logic close to the data)
 GRANT EXECUTE ON pkg_tenant TO app_runtime;
 GRANT EXECUTE ON pkg_order_management TO app_runtime;

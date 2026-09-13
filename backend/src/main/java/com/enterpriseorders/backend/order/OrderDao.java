@@ -242,12 +242,3 @@ public class OrderDao {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 1-6 completadas (6 commits)
-- [x] FASE 7: OrderDao (invoca PL/SQL packages vía JDBC + mapeo errores)
-- [ ] FASE 7: Order DTOs (request/response)
-- [ ] FASE 7: OrderService (con idempotencia)
-- [ ] FASE 7: OrderController (REST endpoints)
-- [ ] FASE 7: Commit fase 7
-- [ ] FASE 8 a 12 (resto del plan)
-</task_progress>

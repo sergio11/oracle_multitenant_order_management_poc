@@ -70,12 +70,3 @@ public class GlobalExceptionHandler {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 6: Oracle UCP config + app yaml + ApiError + main + exceptions
-- [x] FASE 6: GlobalExceptionHandler
-- [ ] FASE 6: CorrelationFilter (X-Correlation-ID)
-- [ ] FASE 6: TenantContext + TenantContextFilter
-- [ ] FASE 6: Módulo Tenant (repository/service/controller)
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>

@@ -36,13 +36,3 @@ CREATE OR REPLACE PACKAGE BODY pkg_vpd AS
 END pkg_vpd;
 /
 </content>
-<task_progress>
-- [x] FASE 1-4 completadas (f47859d, dded060, d3bd043, 3728f65)
-- [x] FASE 5: PKG_VPD spec
-- [x] FASE 5: PKG_VPD body (predicate)
-- [ ] FASE 5: VPD policies script (DBMS_RLS)
-- [ ] FASE 5: Migración V011 (VPD reproducible vía Flyway)
-- [ ] FASE 5: Grant DBMS_RLS a APP_OWNER + grants runtime/reporting
-- [ ] FASE 5: Commit fase 5
-- [ ] FASE 6 a 12 (resto del plan)
-</task_progress>

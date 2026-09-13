@@ -20,11 +20,3 @@ COPY --from=build /workspace/target/backend-*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 </content>
-<task_progress>
-- [x] FASE 6: infraestructura backend base completa (UCP, filtros, tenant, DTOs, service, controller, ymls)
-- [x] FASE 6: Dockerfile backend
-- [ ] FASE 6: Revisar estado git
-- [ ] FASE 6: Compilar backend (mvn compile) para validar
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>

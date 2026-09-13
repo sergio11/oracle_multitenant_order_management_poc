@@ -94,13 +94,3 @@ END pkg_audit;
 GRANT EXECUTE ON pkg_audit TO app_runtime;
 GRANT EXECUTE ON pkg_audit TO app_reporting;
 </content>
-<task_progress>
-- [x] FASE 1-3 completadas
-- [x] FASE 4: PKG_TENANT (spec + body)
-- [x] FASE 4: PKG_AUDIT spec
-- [x] FASE 4: PKG_AUDIT body
-- [ ] FASE 4: PKG_INVENTORY (spec + body)
-- [ ] FASE 4: PKG_ORDER_MANAGEMENT (spec + body)
-- [ ] FASE 4: Commit fase 4
-- [ ] FASE 5 a 12 (resto del plan)
-</task_progress>

@@ -21,11 +21,11 @@ public class OutboxDao {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public void writeEvent(Long tenantId, String eventType, String payload,
-                           String correlationId) {
+    public void writeEvent(Long tenantId, String aggregateType, String aggregateId,
+                           String eventType, String payload) {
         jdbcTemplate.update(
-                "INSERT INTO outbox_event (tenant_id, event_type, payload, " +
-                "correlation_id, created_at) VALUES (?, ?, ?, ?, SYSTIMESTAMP)",
-                tenantId, eventType, payload, correlationId);
+                "INSERT INTO outbox_event (tenant_id, aggregate_type, aggregate_id, event_type, payload, status) " +
+                "VALUES (?, ?, ?, ?, ?, 'NEW')",
+                tenantId, aggregateType, aggregateId, eventType, payload);
     }
 }

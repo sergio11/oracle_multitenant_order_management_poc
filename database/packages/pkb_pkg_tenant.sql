@@ -110,13 +110,3 @@ END pkg_tenant;
 GRANT EXECUTE ON pkg_tenant TO app_runtime;
 GRANT EXECUTE ON pkg_tenant TO app_reporting;
 </content>
-<task_progress>
-- [x] FASE 1-3 completadas
-- [x] FASE 4: PKG_TENANT spec
-- [x] FASE 4: PKG_TENANT body
-- [ ] FASE 4: PKG_AUDIT (spec + body)
-- [ ] FASE 4: PKG_INVENTORY (spec + body)
-- [ ] FASE 4: PKG_ORDER_MANAGEMENT (spec + body)
-- [ ] FASE 4: Commit fase 4
-- [ ] FASE 5 a 12 (resto del plan)
-</task_progress>

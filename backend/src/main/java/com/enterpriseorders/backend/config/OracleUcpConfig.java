@@ -86,14 +86,3 @@ public class OracleUcpConfig {
     }
 }
 </content>
-<task_progress>
-- [x] FASE 1-5 completadas (f47859d, dded060, d3bd043, 3728f65, 8af9fcb)
-- [x] FASE 6: Oracle UCP config class
-- [ ] FASE 6: application-local.yml + application-test.yml
-- [ ] FASE 6: Clase principal Spring Boot
-- [ ] FASE 6: Global error handler
-- [ ] FASE 6: Tenant context interceptor + resolver
-- [ ] FASE 6: Módulo Tenant (domain/repository/service/controller)
-- [ ] FASE 6: Commit fase 6
-- [ ] FASE 7 a 12 (resto del plan)
-</task_progress>
