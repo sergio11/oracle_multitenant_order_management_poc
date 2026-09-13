@@ -48,7 +48,7 @@ BEGIN
     END;
 
     -- Record this worker's outcome
-    INSERT INTO ${p_results_table} (worker_id, order_id, result, error_msg, ts)
+    INSERT INTO &p_results_table (worker_id, order_id, result, error_msg, ts)
     VALUES (&p_worker_id, v_order_id, v_result, v_err_msg, SYSTIMESTAMP);
     COMMIT;
 
@@ -56,7 +56,7 @@ BEGIN
                          ' order_id=' || v_order_id);
 EXCEPTION
     WHEN OTHERS THEN
-        INSERT INTO ${p_results_table} (worker_id, order_id, result, error_msg, ts)
+        INSERT INTO &p_results_table (worker_id, order_id, result, error_msg, ts)
         VALUES (&p_worker_id, NULL, 'ERROR', SQLERRM, SYSTIMESTAMP);
         COMMIT;
         DBMS_OUTPUT.PUT_LINE('Worker &&p_worker_id -> ERROR: ' || SQLERRM);
@@ -65,8 +65,3 @@ END;
 /
 
 EXIT SUCCESS
-</arg_value><arg_key>task_progress</arg_key><arg_value>- [x] FASE 1-9 completadas (9 commits)
-- [x] FASE 10: IT_order_to_payment.sql + T_security_tenant_isolation.sql + worker concurrency
-- [ ] FASE 10: Test de concurrencia (orquestador paralelo + assertions)
-- [ ] FASE 10: Commit fase 10
-- [ ] FASE 11-12: CI/CD + GoldenGate</arg_value></tool_call>

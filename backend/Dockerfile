@@ -18,5 +18,6 @@ WORKDIR /app
 COPY --from=build /workspace/target/backend-*.jar app.jar
 
 EXPOSE 8080
+USER nonroot
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 </content>

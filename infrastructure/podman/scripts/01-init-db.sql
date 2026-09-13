@@ -63,6 +63,8 @@ GRANT EXECUTE ON pkg_audit TO app_runtime;
 GRANT EXECUTE ON pkg_vpd TO app_runtime;
 -- Inserts on outbox (Transactional Outbox, SRS 63)
 GRANT INSERT, UPDATE ON outbox_event TO app_runtime;
+GRANT INSERT ON audit_event TO app_runtime;
+GRANT INSERT ON order_status_history TO app_runtime;
 
 --=====================================================================
 -- APP_REPORTING : read-only reporting user (reporting workload).

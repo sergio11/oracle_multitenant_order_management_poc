@@ -70,11 +70,11 @@ DECLARE
 BEGIN
     SELECT COUNT(*)
     INTO v_events
-    FROM audit_log
+    FROM audit_event
     WHERE tenant_id = &p_tenant_id
-      AND entity_type = 'ORDER'
+      AND entity_type = 'SALES_ORDER'
       AND entity_id  = :v_order_id
-      AND action     = 'CONFIRM';
+      AND action     = 'STATUS_CONFIRMED';
     IF v_events < 1 THEN
         RAISE_APPLICATION_ERROR(-20902, 'Audit trail missing CONFIRM event for order');
     END IF;
@@ -100,10 +100,3 @@ END;
 
 PROMPT === IT: order-to-payment flow PASSED ===
 EXIT SUCCESS
-</arg_value><arg_key>task_progress</arg_key><arg_value>- [x] FASE 1-9 completadas (9 commits)
-- [x] FASE 10: IT_order_to_payment.sql (integración)
-- [ ] FASE 10: Test de aislamiento de tenant (VPD cross-tenant)
-- [ ] FASE 10: Test de concurrencia
-- [ ] FASE 10: Test de seguridad (privilegios APP_RUNTIME)
-- [ ] FASE 10: Commit fase 10
-- [ ] FASE 11-12: CI/CD + GoldenGate</arg_value></tool_call>

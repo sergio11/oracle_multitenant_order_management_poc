@@ -1,5 +1,5 @@
 --=====================================================================
--- Security test: VPD cross-tenant isolation (SRS §14, §52, §93, BR-013)
+-- Security test: VPD cross-tenant isolation (SRS Â§14, Â§52, Â§93, BR-013)
 --
 -- Verifies TENANT ISOLATION: once a session sets a tenant context,
 -- queries can NEVER see rows belonging to another tenant. This is a
@@ -65,10 +65,4 @@ END;
 EXEC pkg_tenant.clear_tenant_context;
 
 PROMPT === SECURITY: tenant isolation PASSED ===
-EXIT SUCCESS
-</arg_value><arg_key>task_progress</arg_key><arg_value>- [x] FASE 1-9 completadas (9 commits)
-- [x] FASE 10: IT_order_to_payment.sql
-- [x] FASE 10: T_security_tenant_isolation.sql (VPD cross-tenant)
-- [ ] FASE 10: Test de concurrencia (orders concurrentes)
-- [ ] FASE 10: Commit fase 10
-- [ ] FASE 11-12: CI/CD + GoldenGate</arg_value></tool_call>
+EXIT SUCCESS

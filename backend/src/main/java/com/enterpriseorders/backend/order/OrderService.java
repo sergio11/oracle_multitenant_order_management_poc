@@ -3,6 +3,7 @@ package com.enterpriseorders.backend.order;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,7 +68,7 @@ public class OrderService {
         }
 
         String actor = "APP_JAVA";
-        orderDao.confirmOrder(tenantId, orderId, actor, null);
+        orderDao.confirmOrder(tenantId, orderId, actor, MDC.get("correlationId"));
 
         // Record idempotency key AFTER successful confirm
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
@@ -80,7 +81,7 @@ public class OrderService {
     @Transactional
     public OrderResponse cancelOrder(Long orderId, String reason) {
         Long tenantId = TenantContext.getTenantId();
-        orderDao.cancelOrder(tenantId, orderId, reason, "APP_JAVA", null);
+        orderDao.cancelOrder(tenantId, orderId, reason, "APP_JAVA", MDC.get("correlationId"));
         return orderDao.findOrder(tenantId, orderId);
     }
 
@@ -104,7 +105,7 @@ public class OrderService {
         }
 
         orderDao.registerPayment(tenantId, orderId, paymentRef, amount, currency,
-                paymentMethod, "APP_JAVA", null);
+                paymentMethod, "APP_JAVA", MDC.get("correlationId"));
 
         if (paymentRef != null && !paymentRef.isBlank()) {
             idempotencyDao.insertIfAbsent(tenantId, "PAY:" + paymentRef, "PAYMENT", orderId);
