@@ -45,5 +45,11 @@ services:
       timeout: 10s
       retries: 10
       start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
     networks:
       - poc_oracle_net

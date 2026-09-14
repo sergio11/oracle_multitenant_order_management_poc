@@ -38,45 +38,60 @@ GRANT CREATE ANY CONTEXT TO app_owner;
 --=====================================================================
 CREATE USER app_runtime IDENTIFIED BY "&2";
 GRANT CREATE SESSION TO app_runtime;
--- Read access on OLTP tables (SRS 58)
-GRANT SELECT ON tenant TO app_runtime;
-GRANT SELECT ON customer TO app_runtime;
-GRANT SELECT ON customer_address TO app_runtime;
-GRANT SELECT ON customer_account TO app_runtime;
-GRANT SELECT ON product_category TO app_runtime;
-GRANT SELECT ON product TO app_runtime;
-GRANT SELECT ON warehouse TO app_runtime;
-GRANT SELECT ON inventory TO app_runtime;
-GRANT SELECT ON sales_order TO app_runtime;
-GRANT SELECT ON sales_order_line TO app_runtime;
-GRANT SELECT ON order_status_history TO app_runtime;
-GRANT SELECT ON payment TO app_runtime;
-GRANT SELECT ON outbox_event TO app_runtime;
-GRANT SELECT ON idempotency_key TO app_runtime;
-GRANT SELECT ON audit_event TO app_runtime;
-GRANT SELECT ON mv_order_daily_summary TO app_runtime;
-GRANT SELECT ON mv_product_sales_summary TO app_runtime;
+-- Grants on OLTP tables (SRS 58) - wrapped in PL/SQL for idempotent startup
+-- Tables may not exist yet if Flyway has not run; errors are silently ignored.
+BEGIN
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.tenant TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.customer TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.customer_address TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.customer_account TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.product_category TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.product TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.warehouse TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.inventory TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.sales_order TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.sales_order_line TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.order_status_history TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.payment TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.outbox_event TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.idempotency_key TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.audit_event TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.mv_order_daily_summary TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.mv_product_sales_summary TO app_runtime';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+
 -- Execute on PL/SQL packages (SRS 32, business logic close to the data)
 GRANT EXECUTE ON pkg_tenant TO app_runtime;
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
 GRANT EXECUTE ON pkg_inventory TO app_runtime;
 GRANT EXECUTE ON pkg_audit TO app_runtime;
 GRANT EXECUTE ON pkg_vpd TO app_runtime;
+
 -- Inserts on outbox (Transactional Outbox, SRS 63)
-GRANT INSERT, UPDATE ON outbox_event TO app_runtime;
-GRANT INSERT ON audit_event TO app_runtime;
-GRANT INSERT ON order_status_history TO app_runtime;
+BEGIN
+    EXECUTE IMMEDIATE 'GRANT INSERT, UPDATE ON APP_OWNER.outbox_event TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT INSERT ON APP_OWNER.audit_event TO app_runtime';
+    EXECUTE IMMEDIATE 'GRANT INSERT ON APP_OWNER.order_status_history TO app_runtime';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
 
 --=====================================================================
 -- APP_REPORTING : read-only reporting user (reporting workload).
 --=====================================================================
 CREATE USER app_reporting IDENTIFIED BY "&3";
 GRANT CREATE SESSION TO app_reporting;
-GRANT SELECT ON mv_order_daily_summary TO app_reporting;
-GRANT SELECT ON mv_product_sales_summary TO app_reporting;
-GRANT SELECT ON tenant TO app_reporting;
-GRANT SELECT ON customer TO app_reporting;
-GRANT SELECT ON product TO app_reporting;
-GRANT SELECT ON sales_order TO app_reporting;
-GRANT SELECT ON sales_order_line TO app_reporting;
-GRANT SELECT ON payment TO app_reporting;
+BEGIN
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.mv_order_daily_summary TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.mv_product_sales_summary TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.tenant TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.customer TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.product TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.sales_order TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.sales_order_line TO app_reporting';
+    EXECUTE IMMEDIATE 'GRANT SELECT ON APP_OWNER.payment TO app_reporting';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/

@@ -1,17 +1,15 @@
 package com.enterpriseorders.backend.order;
 
-import com.enterpriseorders.backend.exception.BusinessException;
+import com.enterpriseorders.backend.order.dto.OrderResponse;
 import com.enterpriseorders.backend.tenant.TenantContext;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.sql.CallableStatement;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.sql.Types;
+import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Order lifecycle service (SRS §33, §53, §96).
@@ -24,17 +22,19 @@ import java.sql.Types;
 @Service
 public class OrderService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private static final String ACTOR = "APP_JAVA";
+
     private final OrderDao orderDao;
     private final IdempotencyDao idempotencyDao;
     private final OutboxDao outboxDao;
+    private final ObjectMapper objectMapper;
 
-    public OrderService(JdbcTemplate jdbcTemplate, OrderDao orderDao,
-                        IdempotencyDao idempotencyDao, OutboxDao outboxDao) {
-        this.jdbcTemplate = jdbcTemplate;
+    public OrderService(OrderDao orderDao, IdempotencyDao idempotencyDao,
+                        OutboxDao outboxDao, ObjectMapper objectMapper) {
         this.orderDao = orderDao;
         this.idempotencyDao = idempotencyDao;
         this.outboxDao = outboxDao;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -61,45 +61,42 @@ public class OrderService {
     public OrderResponse confirmOrder(Long orderId, String idempotencyKey) {
         Long tenantId = currentTenantId();
 
-        // Idempotency: return existing result on retry (FR-014, FT-004)
+        OrderResponse result = executeIdempotent(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId,
+            () -> {
+                orderDao.confirmOrder(tenantId, orderId, ACTOR, MDC.get("correlationId"));
+                return orderDao.findOrder(tenantId, orderId);
+            });
+
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            var existing = idempotencyDao.findByKey(tenantId, idempotencyKey);
-            if (existing.isPresent()) {
-                return orderDao.findOrder(tenantId, existing.get().aggregateId());
-            }
-            // Insert PENDING record to acquire lock and prevent concurrent execution
-            if (!idempotencyDao.insertPending(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId)) {
-                // Another request inserted first - return existing result
-                var raceResult = idempotencyDao.findByKey(tenantId, idempotencyKey);
-                if (raceResult.isPresent()) {
-                    return orderDao.findOrder(tenantId, raceResult.get().aggregateId());
-                }
+            try {
+                idempotencyDao.markCompleted(tenantId, idempotencyKey,
+                    objectMapper.writeValueAsString(Map.of("orderId", orderId)));
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize idempotency result", e);
             }
         }
 
-        String actor = "APP_JAVA";
-        orderDao.confirmOrder(tenantId, orderId, actor, MDC.get("correlationId"));
-
-        // Mark idempotency as completed
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            idempotencyDao.markCompleted(tenantId, idempotencyKey, "{\"orderId\":" + orderId + "}");
+        try {
+            outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
+                "ORDER_CONFIRMED", objectMapper.writeValueAsString(Map.of("orderId", orderId, "tenantId", tenantId)));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize outbox event", e);
         }
 
-        // Publish ORDER_CONFIRMED event to transactional outbox
-        outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
-                "ORDER_CONFIRMED", "{\"orderId\":" + orderId + ",\"tenantId\":" + tenantId + "}");
-
-        return orderDao.findOrder(tenantId, orderId);
+        return result;
     }
 
     @Transactional
     public OrderResponse cancelOrder(Long orderId, String reason) {
         Long tenantId = currentTenantId();
-        orderDao.cancelOrder(tenantId, orderId, reason, "APP_JAVA", MDC.get("correlationId"));
+        orderDao.cancelOrder(tenantId, orderId, reason, ACTOR, MDC.get("correlationId"));
 
-        // Publish ORDER_CANCELLED event to transactional outbox
-        outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
-                "ORDER_CANCELLED", "{\"orderId\":" + orderId + ",\"tenantId\":" + tenantId + "}");
+        try {
+            outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
+                "ORDER_CANCELLED", objectMapper.writeValueAsString(Map.of("orderId", orderId, "tenantId", tenantId)));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize outbox event", e);
+        }
 
         return orderDao.findOrder(tenantId, orderId);
     }
@@ -115,38 +112,54 @@ public class OrderService {
                                          String paymentMethod, String idempotencyKey) {
         Long tenantId = currentTenantId();
 
-        // Idempotency by payment reference
+        OrderResponse result = executeIdempotent(tenantId, idempotencyKey, "PAYMENT", orderId,
+            () -> {
+                orderDao.registerPayment(tenantId, orderId, paymentRef, amount, currency,
+                    paymentMethod, ACTOR, MDC.get("correlationId"));
+                return orderDao.findOrder(tenantId, orderId);
+            });
+
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            var existing = idempotencyDao.findByKey(tenantId, idempotencyKey);
-            if (existing.isPresent()) {
-                return orderDao.findOrder(tenantId, existing.get().aggregateId());
-            }
-            if (!idempotencyDao.insertPending(tenantId, idempotencyKey, "PAYMENT", orderId)) {
-                var raceResult = idempotencyDao.findByKey(tenantId, idempotencyKey);
-                if (raceResult.isPresent()) {
-                    return orderDao.findOrder(tenantId, raceResult.get().aggregateId());
-                }
+            try {
+                idempotencyDao.markCompleted(tenantId, idempotencyKey,
+                    objectMapper.writeValueAsString(Map.of("orderId", orderId)));
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize idempotency result", e);
             }
         }
 
-        orderDao.registerPayment(tenantId, orderId, paymentRef, amount, currency,
-                paymentMethod, "APP_JAVA", MDC.get("correlationId"));
-
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            idempotencyDao.markCompleted(tenantId, idempotencyKey, "{\"orderId\":" + orderId + "}");
+        try {
+            outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
+                "PAYMENT_REGISTERED", objectMapper.writeValueAsString(Map.of("orderId", orderId, "paymentRef", paymentRef)));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize outbox event", e);
         }
 
-        // Publish PAYMENT_REGISTERED event to transactional outbox
-        outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
-                "PAYMENT_REGISTERED", "{\"orderId\":" + orderId + ",\"paymentRef\":\"" + paymentRef + "\"}");
-
-        return orderDao.findOrder(tenantId, orderId);
+        return result;
     }
 
     @Transactional(readOnly = true)
     public OrderResponse getOrder(Long orderId) {
         Long tenantId = currentTenantId();
         return orderDao.findOrder(tenantId, orderId);
+    }
+
+    private OrderResponse executeIdempotent(Long tenantId, String idempotencyKey,
+                                             String operation, Long orderId,
+                                             Supplier<OrderResponse> action) {
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            var existing = idempotencyDao.findByKey(tenantId, idempotencyKey);
+            if (existing.isPresent()) {
+                return orderDao.findOrder(tenantId, existing.get().aggregateId());
+            }
+            if (!idempotencyDao.insertPending(tenantId, idempotencyKey, operation, orderId)) {
+                var raceResult = idempotencyDao.findByKey(tenantId, idempotencyKey);
+                if (raceResult.isPresent()) {
+                    return orderDao.findOrder(tenantId, raceResult.get().aggregateId());
+                }
+            }
+        }
+        return action.get();
     }
 
     private Long currentTenantId() {

@@ -11,9 +11,9 @@ public class DatabaseException extends RuntimeException {
         this.sqlState = null;
     }
 
-    public DatabaseException(String message, Throwable cause, String sqlState) {
+    public DatabaseException(String code, String message, Throwable cause, String sqlState) {
         super(message, cause);
-        this.code = "DATABASE_ERROR";
+        this.code = code;
         this.sqlState = sqlState;
     }
 

@@ -12,4 +12,3 @@ public record OrderLineRequest(
         @NotNull Long warehouseId
 ) {
 }
-</content>

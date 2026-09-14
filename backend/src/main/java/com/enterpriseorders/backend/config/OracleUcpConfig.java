@@ -85,4 +85,3 @@ public class OracleUcpConfig {
         return new TenantAwareDataSource(oraclePool);
     }
 }
-</content>

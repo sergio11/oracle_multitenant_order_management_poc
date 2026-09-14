@@ -21,4 +21,3 @@ public record ApiError(
         return new ApiError(code, message, correlationId);
     }
 }
-</content>

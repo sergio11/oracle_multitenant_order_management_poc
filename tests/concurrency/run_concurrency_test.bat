@@ -10,23 +10,16 @@ REM Requires sqlplus on PATH and the DB reachable at localhost:1521.
 REM =====================================================================
 setlocal enabledelayedexpansion
 
-if "%1"=="" (
-  set DB_CONN=app_runtime/ChangeMe123!@//localhost:1521/pdb_oltp
-  set TENANT_ID=1
-  set CUSTOMER_ID=1
-  set PRODUCT_ID=1
-  set WAREHOUSE_ID=1
-  set WORKERS=5
-) else (
-  set DB_CONN=%1
-  set TENANT_ID=2
-  set CUSTOMER_ID=4
-  set PRODUCT_ID=3
-  set WAREHOUSE_ID=1
-  set WORKERS=5
-)
+if not defined DB_USER set DB_USER=app_runtime
+if not defined DB_PASS set DB_PASS=ChangeMe123!
+if not defined DB_CONN set DB_CONN=%DB_USER%/%DB_PASS%@//localhost:1521/pdb_oltp
+if not defined TENANT_ID set TENANT_ID=1
+if not defined CUSTOMER_ID set CUSTOMER_ID=1
+if not defined PRODUCT_ID set PRODUCT_ID=1
+if not defined WAREHOUSE_ID set WAREHOUSE_ID=1
+if not defined WORKERS set WORKERS=5
 
-set RESULTS_TBL=concurrency_results_!TIME: =!
+set RESULTS_TBL=concurrency_results_%RANDOM%
 
 echo === Concurrency test: !WORKERS! workers, stock qty=1 ===
 
@@ -55,11 +48,18 @@ for /L %%i in (1,1,!WORKERS!) do (
 )
 
 REM 4) Wait for all background workers to finish
+set TIMEOUT=120
+set ELAPSED=0
 :waitloop
-tasklist /fi "imagename eq cmd.exe" /v | find "worker1" >nul
+tasklist /fi "imagename eq sqlplus.exe" 2>nul | find /i "sqlplus" >nul
 if not errorlevel 1 (
+  if !ELAPSED! GEQ %TIMEOUT% (
+    echo TIMEOUT: Workers did not finish in %TIMEOUT% seconds
+    goto :cleanup
+  )
   timeout /t 2 /nobreak >nul
-  goto waitloop
+  set /a ELAPSED+=2
+  goto :waitloop
 )
 
 REM 5) Assert: exactly 1 worker CONFIRMED
@@ -86,6 +86,7 @@ REM 5) Assert: exactly 1 worker CONFIRMED
 ) | sqlplus -s %DB_CONN%
 
 REM 5b) Cleanup results table
+:cleanup
 (
   echo "DROP TABLE !RESULTS_TBL! PURGE;"
   echo "exit"

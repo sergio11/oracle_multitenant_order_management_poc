@@ -16,4 +16,3 @@ public class EnterpriseOrderPlatformApplication {
         SpringApplication.run(EnterpriseOrderPlatformApplication.class, args);
     }
 }
-</content>

@@ -234,7 +234,8 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         CURSOR c_lines IS
             SELECT product_id, quantity
               FROM sales_order_line
-             WHERE order_id = p_order_id AND tenant_id = p_tenant_id;
+             WHERE order_id = p_order_id AND tenant_id = p_tenant_id
+             ORDER BY product_id;
         v_warehouse_id NUMBER;
     BEGIN
         -- Lock the order row first to serialize confirmations
@@ -321,7 +322,8 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         CURSOR c_lines IS
             SELECT product_id, quantity
               FROM sales_order_line
-             WHERE order_id = p_order_id AND tenant_id = p_tenant_id;
+             WHERE order_id = p_order_id AND tenant_id = p_tenant_id
+             ORDER BY product_id;
     BEGIN
         SELECT status INTO v_status
           FROM sales_order

@@ -52,7 +52,7 @@ public final class PlsqlErrorMapper {
         }
 
         // Unknown ORA code -> technical DatabaseException (HTTP 500)
-        return new DatabaseException("Database operation failed", ex, ex.getSQLState());
+        return new DatabaseException("DATABASE_ERROR", "Database operation failed", ex, ex.getSQLState());
     }
 
     private record ErrorMapping(String code, String message, int httpStatus) {

@@ -14,4 +14,3 @@ public record CreateOrderRequest(
         @NotBlank String currency
 ) {
 }
-</content>
