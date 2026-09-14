@@ -1,6 +1,7 @@
 package com.enterpriseorders.backend.order;
 
 import com.enterpriseorders.backend.exception.BusinessException;
+import com.enterpriseorders.backend.exception.PlsqlErrorMapper;
 import com.enterpriseorders.backend.order.dto.OrderResponse;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -182,63 +183,8 @@ public class OrderDao {
         });
     }
 
-    /**
-     * Maps PL/SQL RAISE_APPLICATION_ERROR codes to functional
-     * BusinessExceptions, hiding ORA-* from consumers (SRS §54).
-     */
-    private BusinessException mapPlsqlError(SQLException ex) {
-        String message = ex.getMessage() == null ? "" : ex.getMessage();
-        int http = 400;
-        String code;
-        String userMessage;
-
-        if (message.contains("ORA-20011")) {
-            code = "INSUFFICIENT_INVENTORY";
-            userMessage = "Insufficient inventory for product";
-        } else if (message.contains("ORA-20020")) {
-            code = "TENANT_SUSPENDED";
-            userMessage = "Tenant is not ACTIVE";
-        } else if (message.contains("ORA-20021")) {
-            code = "CUSTOMER_TENANT_MISMATCH";
-            userMessage = "Customer does not belong to this tenant";
-        } else if (message.contains("ORA-20022")) {
-            code = "PRODUCT_TENANT_MISMATCH";
-            userMessage = "Product does not belong to this tenant";
-        } else if (message.contains("ORA-20023")) {
-            code = "ORDER_NOT_DRAFT";
-            userMessage = "Cannot add lines to a non-DRAFT order";
-        } else if (message.contains("ORA-20024")) {
-            code = "ORDER_NOT_FOUND";
-            userMessage = "Order or warehouse not found";
-            http = 404;
-        } else if (message.contains("ORA-20025")) {
-            code = "ORDER_NOT_CONFIRMABLE";
-            userMessage = "Order cannot be confirmed from current status";
-        } else if (message.contains("ORA-20026")) {
-            code = "ORDER_NO_LINES";
-            userMessage = "Order has no lines - cannot confirm";
-        } else if (message.contains("ORA-20027")) {
-            code = "ORDER_NOT_CANCELLABLE";
-            userMessage = "Order cannot be cancelled from current status";
-        } else if (message.contains("ORA-20028")) {
-            code = "PAYMENT_STATE_INVALID";
-            userMessage = "Payment requires order CONFIRMED or later";
-        } else if (message.contains("ORA-20029")) {
-            code = "DUPLICATE_PAYMENT_REF";
-            userMessage = "Duplicate payment reference";
-            http = 409;
-        } else if (message.contains("ORA-20010")) {
-            code = "INVALID_QUANTITY";
-            userMessage = "Reservation quantity must be positive";
-        } else if (message.contains("ORA-20014")) {
-            code = "INSUFFICIENT_RESERVED";
-            userMessage = "Reserved quantity insufficient for release";
-        } else {
-            code = "DATABASE_ERROR";
-            userMessage = "Order operation failed";
-            http = 500;
-        }
-        return new BusinessException(code, userMessage, http);
+    private RuntimeException mapPlsqlError(SQLException ex) {
+        return PlsqlErrorMapper.map(ex);
     }
 }
 </content>

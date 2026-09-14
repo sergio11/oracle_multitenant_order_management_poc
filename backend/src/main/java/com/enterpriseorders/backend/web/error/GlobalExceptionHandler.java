@@ -2,6 +2,7 @@ package com.enterpriseorders.backend.web.error;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.DatabaseException;
+import com.enterpriseorders.backend.exception.RefreshRateLimitException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -59,6 +60,13 @@ public class GlobalExceptionHandler {
                 .collect(Collectors.joining(", "));
         ApiError body = ApiError.of("VALIDATION_ERROR", message, correlationId);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    @ExceptionHandler(RefreshRateLimitException.class)
+    public ResponseEntity<ApiError> handleRefreshRateLimit(RefreshRateLimitException ex, WebRequest request) {
+        String correlationId = request.getHeader("X-Correlation-ID");
+        ApiError body = ApiError.of("RATE_LIMIT_EXCEEDED", ex.getMessage(), correlationId);
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
     }
 
     @ExceptionHandler(Exception.class)

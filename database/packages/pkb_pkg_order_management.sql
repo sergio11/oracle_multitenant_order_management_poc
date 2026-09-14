@@ -202,24 +202,17 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             p_tenant_id, p_order_id, p_product_id, p_quantity, v_unit_price, v_line_total
         );
 
-        -- Recalculate order total
+        -- Recalculate order total and transition DRAFT -> PENDING (BR-004)
         UPDATE sales_order
            SET total_amount = (
                    SELECT NVL(SUM(line_total), 0)
                      FROM sales_order_line
                     WHERE order_id = p_order_id AND tenant_id = p_tenant_id
                ),
+               status = CASE WHEN status = 'DRAFT' THEN 'PENDING' ELSE status END,
                updated_at = SYSTIMESTAMP,
                version = version + 1
          WHERE order_id = p_order_id AND tenant_id = p_tenant_id;
-
-        -- Set status to PENDING once lines exist (BR-004)
-        UPDATE sales_order
-           SET status = 'PENDING',
-               updated_at = SYSTIMESTAMP,
-               version = version + 1
-         WHERE order_id = p_order_id AND tenant_id = p_tenant_id
-           AND status = 'DRAFT';
 
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
@@ -271,9 +264,13 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         -- in add_order_line is reserved for future multi-warehouse support.
         -- See SRS §37 for inventory reservation requirements.
         SELECT warehouse_id INTO v_warehouse_id
-          FROM warehouse
-         WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
-           AND ROWNUM = 1;
+          FROM (
+            SELECT warehouse_id
+              FROM warehouse
+             WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
+             ORDER BY warehouse_id
+          )
+         WHERE ROWNUM = 1;
 
         -- Reserve inventory for each line (atomic, locks rows)
         FOR r IN c_lines LOOP
@@ -339,9 +336,13 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         -- If previously confirmed/allocated, release inventory
         IF v_status IN ('CONFIRMED','ALLOCATED','PAID','SHIPPED') THEN
             SELECT warehouse_id INTO v_warehouse_id
-              FROM warehouse
-             WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
-               AND ROWNUM = 1;
+              FROM (
+                SELECT warehouse_id
+                  FROM warehouse
+                 WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
+                 ORDER BY warehouse_id
+              )
+             WHERE ROWNUM = 1;
 
             FOR r IN c_lines LOOP
                 pkg_inventory.release_stock(

@@ -1,0 +1,37 @@
+spring:
+  config:
+    activate:
+      on-profile: prod
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+oracle:
+  url: ${ORACLE_URL}
+  username: ${ORACLE_USER}
+  password: ${ORACLE_PASSWORD}
+  ucp:
+    initial-pool-size: 10
+    min-pool-size: 10
+    max-pool-size: 50
+    connection-wait-timeout: 5
+    inactive-connection-timeout: 120
+    abandoned-connection-timeout: 60
+    validate-connection-on-borrow: true
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      base-path: /internal
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: WARN
+    com.enterpriseorders: INFO

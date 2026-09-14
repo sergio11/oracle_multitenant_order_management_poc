@@ -1,0 +1,62 @@
+package com.enterpriseorders.backend.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(AbstractHttpConfigurer::disable)
+            .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                // Public endpoints
+                .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/tenants").permitAll()
+                // Order operations require ORDER_OPERATOR role
+                .requestMatchers("/api/v1/orders/**").hasRole("ORDER_OPERATOR")
+                // Reporting refresh requires ADMIN role
+                .requestMatchers(HttpMethod.POST, "/api/v1/reports/refresh").hasRole("ADMIN")
+                // Reporting reads require ORDER_OPERATOR role
+                .requestMatchers("/api/v1/reports/**").hasRole("ORDER_OPERATOR")
+                // Everything else requires authentication
+                .anyRequest().authenticated()
+            )
+            .httpBasic(basic -> {});
+        return http.build();
+    }
+
+    @Bean
+    public UserDetailsService userDetailsService(PasswordEncoder encoder) {
+        var admin = User.builder()
+            .username("admin")
+            .password(encoder.encode("admin123"))
+            .roles("ADMIN", "ORDER_OPERATOR")
+            .build();
+        var operator = User.builder()
+            .username("operator")
+            .password(encoder.encode("operator123"))
+            .roles("ORDER_OPERATOR")
+            .build();
+        return new InMemoryUserDetailsManager(admin, operator);
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}

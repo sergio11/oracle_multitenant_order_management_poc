@@ -1,0 +1,13 @@
+.git
+*.md
+LICENSE
+SRS.txt
+tests/
+goldengate/
+infrastructure/
+database/
+.idea/
+.vscode/
+*.iml
+target/
+.env

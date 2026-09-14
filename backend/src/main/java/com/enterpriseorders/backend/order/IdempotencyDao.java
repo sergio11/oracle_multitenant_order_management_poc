@@ -55,6 +55,27 @@ public class IdempotencyDao {
         }
     }
 
+    public boolean insertPending(Long tenantId, String idempotencyKey,
+                                 String operation, Long aggregateId) {
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO idempotency_key " +
+                    "(tenant_id, idempotency_key, operation, aggregate_id, status) " +
+                    "VALUES (?, ?, ?, ?, 'PENDING')",
+                    tenantId, idempotencyKey, operation, aggregateId);
+            return true;
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    public void markCompleted(Long tenantId, String idempotencyKey, String responsePayload) {
+        jdbcTemplate.update(
+                "UPDATE idempotency_key SET status = 'COMPLETED', response_payload = ? " +
+                "WHERE tenant_id = ? AND idempotency_key = ?",
+                responsePayload, tenantId, idempotencyKey);
+    }
+
     /**
      * Value object describing a recorded idempotent operation result.
      */

@@ -1,0 +1,41 @@
+# Build artifacts
+target/
+*.jar
+*.class
+*.war
+*.ear
+dependency-reduced-pom.xml
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.factorypath
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# Docker
+docker-compose.override.yaml
+
+# Flyway
+*.sql.bak

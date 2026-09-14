@@ -19,7 +19,7 @@
 CREATE SEQUENCE tenant_ord_seq
     START WITH 10000
     INCREMENT BY 1
-    NOCACHE
+    CACHE 20
     NOCYCLE;
 
 --=====================================================================

@@ -75,6 +75,6 @@ public class OrderController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         return ResponseEntity.ok(orderService.registerPayment(
                 id, request.paymentReference(), request.amount(), request.currency(),
-                request.paymentMethod()));
+                request.paymentMethod(), idempotencyKey));
     }
 }

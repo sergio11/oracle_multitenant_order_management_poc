@@ -1,3 +1,4 @@
+-- Usage: @01-init-db.sql <APP_OWNER_PWD> <APP_RUNTIME_PWD> <APP_REPORTING_PWD>
 --=====================================================================
 -- Oracle Local Lab - Initial Database Setup
 --
@@ -19,7 +20,7 @@
 -- APP_OWNER : owns the application schema objects.
 -- Used by Flyway migrations to run DDL.
 --=====================================================================
-CREATE USER app_owner IDENTIFIED BY "ChangeMe123!";
+CREATE USER app_owner IDENTIFIED BY "&1";
 GRANT CONNECT, RESOURCE TO app_owner;
 GRANT CREATE SESSION TO app_owner;
 GRANT UNLIMITED TABLESPACE TO app_owner;
@@ -35,7 +36,7 @@ GRANT CREATE ANY CONTEXT TO app_owner;
 -- Least privilege: SELECT on tables/MVs/sequences + EXECUTE on packages.
 -- No DDL, no DBA. ORA-00942 surfaces if objects are absent.
 --=====================================================================
-CREATE USER app_runtime IDENTIFIED BY "ChangeMe123!";
+CREATE USER app_runtime IDENTIFIED BY "&2";
 GRANT CREATE SESSION TO app_runtime;
 -- Read access on OLTP tables (SRS 58)
 GRANT SELECT ON tenant TO app_runtime;
@@ -69,7 +70,7 @@ GRANT INSERT ON order_status_history TO app_runtime;
 --=====================================================================
 -- APP_REPORTING : read-only reporting user (reporting workload).
 --=====================================================================
-CREATE USER app_reporting IDENTIFIED BY "ChangeMe123!";
+CREATE USER app_reporting IDENTIFIED BY "&3";
 GRANT CREATE SESSION TO app_reporting;
 GRANT SELECT ON mv_order_daily_summary TO app_reporting;
 GRANT SELECT ON mv_product_sales_summary TO app_reporting;

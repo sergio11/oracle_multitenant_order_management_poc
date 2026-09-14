@@ -29,8 +29,13 @@ CREATE OR REPLACE PACKAGE BODY pkg_vpd AS
             RETURN '1=0';
         END IF;
 
+        -- Defense: validate tenant_id is numeric before concatenation
+        IF NOT REGEXP_LIKE(v_tenant_id, '^[0-9]+$') THEN
+            RETURN '1=0';
+        END IF;
+
         -- Tenant-scoped predicate (SRS 14, 45).
-        RETURN 'tenant_id = TO_NUMBER(''' || v_tenant_id || ''')';
+        RETURN 'tenant_id = ' || TO_NUMBER(v_tenant_id);
     END tenant_predicate;
 
 END pkg_vpd;

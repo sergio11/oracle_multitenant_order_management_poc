@@ -13,11 +13,20 @@ COPY src ./src
 RUN mvn -q package -DskipTests
 
 # Stage 2: runtime
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21-jre-jammy
+LABEL maintainer="Sergio Sanchez" version="0.0.1"
 WORKDIR /app
-COPY --from=build /workspace/target/backend-*.jar app.jar
+
+COPY --from=build /workspace/target/backend-0.0.1-SNAPSHOT.jar app.jar
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8080/actuator/health || exit 1
+
 USER nonroot
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
-</content>
+
+ENTRYPOINT ["java", \
+    "-XX:MaxRAMPercentage=75.0", \
+    "-XX:+UseContainerSupport", \
+    "-jar", "/app/app.jar"]

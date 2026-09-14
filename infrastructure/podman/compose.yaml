@@ -34,7 +34,6 @@ services:
       ORACLE_PWD: ${ORACLE_PWD:-ChangeMe123!}
     ports:
       - "${ORACLE_LISTENER_PORT:-1521}:1521"
-      - "${ORACLE_HTTP_PORT:-8080}:8080"
     volumes:
       - oracle-data:/opt/oracle/oradata
       # Bind-mount local scripts so gvenzl/oracle-free executes them on

@@ -27,24 +27,26 @@ public class OrderService {
     private final JdbcTemplate jdbcTemplate;
     private final OrderDao orderDao;
     private final IdempotencyDao idempotencyDao;
+    private final OutboxDao outboxDao;
 
     public OrderService(JdbcTemplate jdbcTemplate, OrderDao orderDao,
-                        IdempotencyDao idempotencyDao) {
+                        IdempotencyDao idempotencyDao, OutboxDao outboxDao) {
         this.jdbcTemplate = jdbcTemplate;
         this.orderDao = orderDao;
         this.idempotencyDao = idempotencyDao;
+        this.outboxDao = outboxDao;
     }
 
     @Transactional
     public OrderResponse createOrder(Long customerId, String currency) {
-        Long tenantId = TenantContext.getTenantId();
+        Long tenantId = currentTenantId();
         Long orderId = orderDao.createOrder(tenantId, customerId, currency);
         return orderDao.findOrder(tenantId, orderId);
     }
 
     @Transactional
     public OrderResponse addLine(Long orderId, Long productId, Long quantity, Long warehouseId) {
-        Long tenantId = TenantContext.getTenantId();
+        Long tenantId = currentTenantId();
         orderDao.addOrderLine(tenantId, orderId, productId, quantity, warehouseId);
         return orderDao.findOrder(tenantId, orderId);
     }
@@ -57,7 +59,7 @@ public class OrderService {
      */
     @Transactional
     public OrderResponse confirmOrder(Long orderId, String idempotencyKey) {
-        Long tenantId = TenantContext.getTenantId();
+        Long tenantId = currentTenantId();
 
         // Idempotency: return existing result on retry (FR-014, FT-004)
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
@@ -65,23 +67,40 @@ public class OrderService {
             if (existing.isPresent()) {
                 return orderDao.findOrder(tenantId, existing.get().aggregateId());
             }
+            // Insert PENDING record to acquire lock and prevent concurrent execution
+            if (!idempotencyDao.insertPending(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId)) {
+                // Another request inserted first - return existing result
+                var raceResult = idempotencyDao.findByKey(tenantId, idempotencyKey);
+                if (raceResult.isPresent()) {
+                    return orderDao.findOrder(tenantId, raceResult.get().aggregateId());
+                }
+            }
         }
 
         String actor = "APP_JAVA";
         orderDao.confirmOrder(tenantId, orderId, actor, MDC.get("correlationId"));
 
-        // Record idempotency key AFTER successful confirm
+        // Mark idempotency as completed
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            idempotencyDao.insertIfAbsent(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId);
+            idempotencyDao.markCompleted(tenantId, idempotencyKey, "{\"orderId\":" + orderId + "}");
         }
+
+        // Publish ORDER_CONFIRMED event to transactional outbox
+        outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
+                "ORDER_CONFIRMED", "{\"orderId\":" + orderId + ",\"tenantId\":" + tenantId + "}");
 
         return orderDao.findOrder(tenantId, orderId);
     }
 
     @Transactional
     public OrderResponse cancelOrder(Long orderId, String reason) {
-        Long tenantId = TenantContext.getTenantId();
+        Long tenantId = currentTenantId();
         orderDao.cancelOrder(tenantId, orderId, reason, "APP_JAVA", MDC.get("correlationId"));
+
+        // Publish ORDER_CANCELLED event to transactional outbox
+        outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
+                "ORDER_CANCELLED", "{\"orderId\":" + orderId + ",\"tenantId\":" + tenantId + "}");
+
         return orderDao.findOrder(tenantId, orderId);
     }
 
@@ -93,28 +112,48 @@ public class OrderService {
     @Transactional
     public OrderResponse registerPayment(Long orderId, String paymentRef,
                                          BigDecimal amount, String currency,
-                                         String paymentMethod) {
-        Long tenantId = TenantContext.getTenantId();
+                                         String paymentMethod, String idempotencyKey) {
+        Long tenantId = currentTenantId();
 
         // Idempotency by payment reference
-        if (paymentRef != null && !paymentRef.isBlank()) {
-            var existing = idempotencyDao.findByKey(tenantId, "PAY:" + paymentRef);
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            var existing = idempotencyDao.findByKey(tenantId, idempotencyKey);
             if (existing.isPresent()) {
                 return orderDao.findOrder(tenantId, existing.get().aggregateId());
+            }
+            if (!idempotencyDao.insertPending(tenantId, idempotencyKey, "PAYMENT", orderId)) {
+                var raceResult = idempotencyDao.findByKey(tenantId, idempotencyKey);
+                if (raceResult.isPresent()) {
+                    return orderDao.findOrder(tenantId, raceResult.get().aggregateId());
+                }
             }
         }
 
         orderDao.registerPayment(tenantId, orderId, paymentRef, amount, currency,
                 paymentMethod, "APP_JAVA", MDC.get("correlationId"));
 
-        if (paymentRef != null && !paymentRef.isBlank()) {
-            idempotencyDao.insertIfAbsent(tenantId, "PAY:" + paymentRef, "PAYMENT", orderId);
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            idempotencyDao.markCompleted(tenantId, idempotencyKey, "{\"orderId\":" + orderId + "}");
         }
+
+        // Publish PAYMENT_REGISTERED event to transactional outbox
+        outboxDao.writeEvent(tenantId, "ORDER", String.valueOf(orderId),
+                "PAYMENT_REGISTERED", "{\"orderId\":" + orderId + ",\"paymentRef\":\"" + paymentRef + "\"}");
 
         return orderDao.findOrder(tenantId, orderId);
     }
 
+    @Transactional(readOnly = true)
     public OrderResponse getOrder(Long orderId) {
-        return orderDao.findOrder(TenantContext.getTenantId(), orderId);
+        Long tenantId = currentTenantId();
+        return orderDao.findOrder(tenantId, orderId);
+    }
+
+    private Long currentTenantId() {
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new IllegalStateException("Tenant context not set");
+        }
+        return tenantId;
     }
 }
