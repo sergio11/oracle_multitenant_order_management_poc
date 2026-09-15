@@ -4,6 +4,12 @@ import com.enterpriseorders.backend.order.dto.CreateOrderRequest;
 import com.enterpriseorders.backend.order.dto.OrderLineRequest;
 import com.enterpriseorders.backend.order.dto.OrderResponse;
 import com.enterpriseorders.backend.order.dto.PaymentRequest;
+import com.enterpriseorders.backend.order.port.input.AddOrderLineUseCase;
+import com.enterpriseorders.backend.order.port.input.CancelOrderUseCase;
+import com.enterpriseorders.backend.order.port.input.ConfirmOrderUseCase;
+import com.enterpriseorders.backend.order.port.input.CreateOrderUseCase;
+import com.enterpriseorders.backend.order.port.input.GetOrderQuery;
+import com.enterpriseorders.backend.order.port.input.RegisterPaymentUseCase;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -31,41 +37,56 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/orders")
 public class OrderController {
 
-    private final OrderService orderService;
+    private final CreateOrderUseCase createOrderUseCase;
+    private final AddOrderLineUseCase addOrderLineUseCase;
+    private final ConfirmOrderUseCase confirmOrderUseCase;
+    private final CancelOrderUseCase cancelOrderUseCase;
+    private final RegisterPaymentUseCase registerPaymentUseCase;
+    private final GetOrderQuery getOrderQuery;
 
-    public OrderController(OrderService orderService) {
-        this.orderService = orderService;
+    public OrderController(CreateOrderUseCase createOrderUseCase,
+                           AddOrderLineUseCase addOrderLineUseCase,
+                           ConfirmOrderUseCase confirmOrderUseCase,
+                           CancelOrderUseCase cancelOrderUseCase,
+                           RegisterPaymentUseCase registerPaymentUseCase,
+                           GetOrderQuery getOrderQuery) {
+        this.createOrderUseCase = createOrderUseCase;
+        this.addOrderLineUseCase = addOrderLineUseCase;
+        this.confirmOrderUseCase = confirmOrderUseCase;
+        this.cancelOrderUseCase = cancelOrderUseCase;
+        this.registerPaymentUseCase = registerPaymentUseCase;
+        this.getOrderQuery = getOrderQuery;
     }
 
     @PostMapping
     public ResponseEntity<OrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(orderService.createOrder(request.customerId(), request.currency()));
+                .body(createOrderUseCase.createOrder(request.customerId(), request.currency()));
     }
 
     @PostMapping("/{id}/lines")
     public ResponseEntity<OrderResponse> addLine(
             @PathVariable Long id,
             @Valid @RequestBody OrderLineRequest request) {
-        return ResponseEntity.ok(orderService.addLine(
+        return ResponseEntity.ok(addOrderLineUseCase.addLine(
                 id, request.productId(), request.quantity(), request.warehouseId()));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<OrderResponse> getOrder(@PathVariable Long id) {
-        return ResponseEntity.ok(orderService.getOrder(id));
+        return ResponseEntity.ok(getOrderQuery.getOrder(id));
     }
 
     @PostMapping("/{id}/confirm")
     public ResponseEntity<OrderResponse> confirmOrder(
             @PathVariable Long id,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        return ResponseEntity.ok(orderService.confirmOrder(id, idempotencyKey));
+        return ResponseEntity.ok(confirmOrderUseCase.confirmOrder(id, idempotencyKey));
     }
 
     @PostMapping("/{id}/cancel")
     public ResponseEntity<OrderResponse> cancelOrder(@PathVariable Long id) {
-        return ResponseEntity.ok(orderService.cancelOrder(id, null));
+        return ResponseEntity.ok(cancelOrderUseCase.cancelOrder(id, null));
     }
 
     @PostMapping("/{id}/payments")
@@ -73,7 +94,7 @@ public class OrderController {
             @PathVariable Long id,
             @Valid @RequestBody PaymentRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        return ResponseEntity.ok(orderService.registerPayment(
+        return ResponseEntity.ok(registerPaymentUseCase.registerPayment(
                 id, request.paymentReference(), request.amount(), request.currency(),
                 request.paymentMethod(), idempotencyKey));
     }

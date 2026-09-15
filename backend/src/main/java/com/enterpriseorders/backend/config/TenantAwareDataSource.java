@@ -1,6 +1,6 @@
 package com.enterpriseorders.backend.config;
 
-import com.enterpriseorders.backend.tenant.TenantContext;
+import com.enterpriseorders.backend.tenant.port.output.TenantContextProvider;
 
 import javax.sql.DataSource;
 import java.io.PrintWriter;
@@ -23,9 +23,11 @@ import java.util.logging.Logger;
 public class TenantAwareDataSource implements DataSource {
 
     private final DataSource delegate;
+    private final TenantContextProvider tenantContext;
 
-    public TenantAwareDataSource(DataSource delegate) {
+    public TenantAwareDataSource(DataSource delegate, TenantContextProvider tenantContext) {
         this.delegate = delegate;
+        this.tenantContext = tenantContext;
     }
 
     @Override
@@ -43,7 +45,7 @@ public class TenantAwareDataSource implements DataSource {
     }
 
     private void applyTenantContext(Connection conn) {
-        Long tenantId = TenantContext.getTenantId();
+        Long tenantId = tenantContext.getTenantId();
         if (tenantId == null) {
             return;
         }

@@ -2,6 +2,8 @@ package com.enterpriseorders.backend.tenant;
 
 import com.enterpriseorders.backend.tenant.dto.TenantRequest;
 import com.enterpriseorders.backend.tenant.dto.TenantResponse;
+import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
+import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,20 +24,22 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/tenants")
 public class TenantController {
 
-    private final TenantService tenantService;
+    private final CreateTenantUseCase createTenantUseCase;
+    private final GetTenantQuery getTenantQuery;
 
-    public TenantController(TenantService tenantService) {
-        this.tenantService = tenantService;
+    public TenantController(CreateTenantUseCase createTenantUseCase, GetTenantQuery getTenantQuery) {
+        this.createTenantUseCase = createTenantUseCase;
+        this.getTenantQuery = getTenantQuery;
     }
 
     @PostMapping
     public ResponseEntity<TenantResponse> createTenant(@Valid @RequestBody TenantRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(tenantService.createTenant(request));
+                .body(createTenantUseCase.createTenant(request));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<TenantResponse> getTenant(@PathVariable Long id) {
-        return ResponseEntity.ok(tenantService.getTenant(id));
+        return ResponseEntity.ok(getTenantQuery.getTenant(id));
     }
 }

@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.order;
 
+import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -13,7 +14,7 @@ import java.util.Optional;
  * and the original result returned without re-executing.
  */
 @Repository
-public class IdempotencyDao {
+public class IdempotencyDao implements IdempotencyStore {
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -21,9 +22,7 @@ public class IdempotencyDao {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * Looks up an existing idempotency record.
-     */
+    @Override
     public Optional<IdempotencyRecord> findByKey(Long tenantId, String idempotencyKey) {
         return jdbcTemplate.query(
                 "SELECT aggregate_id, operation, status " +
@@ -55,6 +54,7 @@ public class IdempotencyDao {
         }
     }
 
+    @Override
     public boolean insertPending(Long tenantId, String idempotencyKey,
                                  String operation, Long aggregateId) {
         try {
@@ -69,16 +69,11 @@ public class IdempotencyDao {
         }
     }
 
+    @Override
     public void markCompleted(Long tenantId, String idempotencyKey, String responsePayload) {
         jdbcTemplate.update(
                 "UPDATE idempotency_key SET status = 'COMPLETED', response_payload = ? " +
                 "WHERE tenant_id = ? AND idempotency_key = ?",
                 responsePayload, tenantId, idempotencyKey);
-    }
-
-    /**
-     * Value object describing a recorded idempotent operation result.
-     */
-    public record IdempotencyRecord(Long aggregateId, String operation, String status) {
     }
 }

@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.config;
 
+import com.enterpriseorders.backend.tenant.port.output.TenantContextProvider;
 import oracle.ucp.jdbc.PoolDataSource;
 import oracle.ucp.jdbc.PoolDataSourceFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -81,7 +82,8 @@ public class OracleUcpConfig {
      */
     @Bean
     @Primary
-    public DataSource dataSource(@Qualifier("oraclePoolDataSource") DataSource oraclePool) {
-        return new TenantAwareDataSource(oraclePool);
+    public DataSource dataSource(@Qualifier("oraclePoolDataSource") DataSource oraclePool,
+                                 TenantContextProvider tenantContext) {
+        return new TenantAwareDataSource(oraclePool, tenantContext);
     }
 }

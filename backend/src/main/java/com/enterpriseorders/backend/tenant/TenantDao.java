@@ -4,6 +4,7 @@ import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.PlsqlErrorMapper;
 import com.enterpriseorders.backend.tenant.dto.TenantRequest;
 import com.enterpriseorders.backend.tenant.dto.TenantResponse;
+import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -15,7 +16,7 @@ import java.sql.Types;
 import java.util.Optional;
 
 @Repository
-public class TenantDao {
+public class TenantDao implements TenantRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -23,6 +24,7 @@ public class TenantDao {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    @Override
     public Optional<Long> findActiveTenantIdByCode(String tenantCode) {
         return jdbcTemplate.query(
                 "SELECT tenant_id FROM tenant WHERE tenant_code = ? AND status = 'ACTIVE'",
@@ -31,6 +33,7 @@ public class TenantDao {
         );
     }
 
+    @Override
     public Optional<Long> findActiveTenantIdById(Long tenantId) {
         return jdbcTemplate.query(
                 "SELECT tenant_id FROM tenant WHERE tenant_id = ? AND status = 'ACTIVE'",
@@ -39,7 +42,8 @@ public class TenantDao {
         );
     }
 
-    public Long createTenant(TenantRequest request) {
+    @Override
+    public Long create(TenantRequest request) {
         return jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
                     "{ ? = call pkg_tenant.create_tenant(?, ?, ?, ?) }")) {
@@ -56,7 +60,8 @@ public class TenantDao {
         });
     }
 
-    public TenantResponse findTenant(Long tenantId) {
+    @Override
+    public TenantResponse findById(Long tenantId) {
         return jdbcTemplate.query(
                 "SELECT tenant_id, tenant_code, name, tier, status, isolation_mode " +
                 "FROM tenant WHERE tenant_id = ?",

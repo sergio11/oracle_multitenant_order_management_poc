@@ -3,9 +3,11 @@ package com.enterpriseorders.backend.order;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.PlsqlErrorMapper;
 import com.enterpriseorders.backend.order.dto.OrderResponse;
+import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -19,7 +21,7 @@ import java.sql.Types;
  * the database where it belongs (SRS §61), minimizing round trips.
  */
 @Repository
-public class OrderDao {
+public class OrderDao implements OrderRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -27,13 +29,11 @@ public class OrderDao {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * Reads a single order for a tenant.
-     */
-    public OrderResponse findOrder(Long tenantId, Long orderId) {
+    @Override
+    public OrderResponse findById(Long tenantId, Long orderId) {
         return jdbcTemplate.query(
                 "SELECT order_id, order_number, tenant_id, customer_id, status, " +
-                "       currency, total_amount " +
+                "       currency, total_amount, version " +
                 "FROM sales_order WHERE order_id = ? AND tenant_id = ?",
                 rs -> {
                     if (!rs.next()) {
@@ -47,15 +47,14 @@ public class OrderDao {
                             rs.getLong("customer_id"),
                             rs.getString("status"),
                             rs.getString("currency"),
-                            rs.getBigDecimal("total_amount"));
+                            rs.getBigDecimal("total_amount"),
+                            rs.getInt("version"));
                 },
                 orderId, tenantId);
     }
 
-    /**
-     * Creates an order via pkg_order_management.create_order (FR-007).
-     */
-    public Long createOrder(Long tenantId, Long customerId, String currency) {
+    @Override
+    public Long create(Long tenantId, Long customerId, String currency) {
         return jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
                     "{ ? = call pkg_order_management.create_order(?, ?, ?) }")) {
@@ -71,11 +70,8 @@ public class OrderDao {
         });
     }
 
-    /**
-     * Adds a line to a DRAFT order via
-     * pkg_order_management.add_order_line (FR-007).
-     */
-    public void addOrderLine(Long tenantId, Long orderId, Long productId,
+    @Override
+    public void addLine(Long tenantId, Long orderId, Long productId,
                              Long quantity, Long warehouseId) {
         jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
@@ -93,12 +89,8 @@ public class OrderDao {
         });
     }
 
-    /**
-     * Confirms an order atomically (inventory reservation + status +
-     * audit + outbox) via pkg_order_management.confirm_order (FR-008,
-     * SRS §37, §63).
-     */
-    public void confirmOrder(Long tenantId, Long orderId, String actor,
+    @Override
+    public void confirm(Long tenantId, Long orderId, String actor,
                              String correlationId) {
         jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
@@ -115,11 +107,8 @@ public class OrderDao {
         });
     }
 
-    /**
-     * Cancels an order (releases inventory if confirmed) via
-     * pkg_order_management.cancel_order (FR-012, BR-008).
-     */
-    public void cancelOrder(Long tenantId, Long orderId, String reason,
+    @Override
+    public void cancel(Long tenantId, Long orderId, String reason,
                             String actor, String correlationId) {
         jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
@@ -137,12 +126,9 @@ public class OrderDao {
         });
     }
 
-    /**
-     * Registers a payment via
-     * pkg_order_management.register_payment (FR-011).
-     */
+    @Override
     public void registerPayment(Long tenantId, Long orderId, String paymentRef,
-                                java.math.BigDecimal amount, String currency,
+                                BigDecimal amount, String currency,
                                 String paymentMethod, String actor,
                                 String correlationId) {
         jdbcTemplate.execute((Connection connection) -> {
@@ -158,25 +144,6 @@ public class OrderDao {
                 cs.setString(8, correlationId);
                 cs.execute();
                 return null;
-            } catch (SQLException ex) {
-                throw mapPlsqlError(ex);
-            }
-        });
-    }
-
-    /**
-     * Reads available stock via pkg_inventory.get_available_stock.
-     */
-    public long getAvailableStock(Long tenantId, Long warehouseId, Long productId) {
-        return jdbcTemplate.execute((Connection connection) -> {
-            try (CallableStatement cs = connection.prepareCall(
-                    "{ ? = call pkg_inventory.get_available_stock(?, ?, ?) }")) {
-                cs.registerOutParameter(1, Types.NUMERIC);
-                cs.setLong(2, tenantId);
-                cs.setLong(3, warehouseId);
-                cs.setLong(4, productId);
-                cs.execute();
-                return cs.getBigDecimal(1).longValue();
             } catch (SQLException ex) {
                 throw mapPlsqlError(ex);
             }

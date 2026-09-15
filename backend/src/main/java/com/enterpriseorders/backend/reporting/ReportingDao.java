@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.reporting;
 
+import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
 import com.enterpriseorders.backend.tenant.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -15,7 +16,7 @@ import java.util.List;
  * appended by Oracle), so reports are automatically tenant-isolated.
  */
 @Repository
-public class ReportingDao {
+public class ReportingDao implements ReportingQueryPort {
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -26,6 +27,7 @@ public class ReportingDao {
     /**
      * Daily order summary from MV_ORDER_DAILY_SUMMARY (SRS §40).
      */
+    @Override
     public List<OrderDailySummary> getDailyOrders() {
         return jdbcTemplate.query(
                 "SELECT tenant_id, order_date, order_count, total_revenue, " +
@@ -43,6 +45,7 @@ public class ReportingDao {
      * Top products from MV_PRODUCT_SALES_SUMMARY (SRS §41), limited by a
      * default of 10.
      */
+    @Override
     public List<ProductSalesSummary> getTopProducts(int limit) {
         return jdbcTemplate.query(
                 "SELECT tenant_id, product_id, period, quantity_sold, revenue, " +
@@ -67,6 +70,7 @@ public class ReportingDao {
      * Refreshes the reporting materialized views (SRS §42).
      * Called on demand to bring MVs up to date with OLTP.
      */
+    @Override
     public void refreshMaterializedViews() {
         jdbcTemplate.execute("BEGIN DBMS_MVIEW.REFRESH('MV_ORDER_DAILY_SUMMARY, MV_PRODUCT_SALES_SUMMARY', 'C'); END;");
     }

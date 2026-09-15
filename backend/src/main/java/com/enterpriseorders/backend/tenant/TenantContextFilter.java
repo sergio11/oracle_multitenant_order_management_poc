@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.tenant;
 
+import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import com.enterpriseorders.backend.web.error.ApiError;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
@@ -20,7 +21,7 @@ import java.io.IOException;
  * authenticated JWT/identity; the design keeps the same pipeline:
  *
  *   Auth/JWT or X-Tenant-ID
- *        -> TenantResolver (TenantDao validates existence + ACTIVE)
+ *        -> TenantResolver (TenantRepository validates existence + ACTIVE)
  *        -> TenantContext (ThreadLocal)
  *        -> TenantAwareDataSource (sets Oracle APP_CTX on the connection)
  *        -> VPD
@@ -33,22 +34,20 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     public static final String TENANT_HEADER = "X-Tenant-ID";
 
-    private final TenantDao tenantDao;
+    private final TenantRepository tenantRepository;
     private final ObjectMapper objectMapper;
 
-    public TenantContextFilter(TenantDao tenantDao, ObjectMapper objectMapper) {
-        this.tenantDao = tenantDao;
+    public TenantContextFilter(TenantRepository tenantRepository, ObjectMapper objectMapper) {
+        this.tenantRepository = tenantRepository;
         this.objectMapper = objectMapper;
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        // Tenant provisioning endpoints do not carry a tenant context.
         if (path.startsWith("/api/v1/tenants")) {
             return true;
         }
-        // Actuator health/info/metrics are not tenant-scoped.
         if (path.startsWith("/actuator")) {
             return true;
         }
@@ -67,8 +66,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
             return;
         }
 
-        // Resolve tenant code (POC) -> numeric tenant_id (VPD-safe)
-        Long tenantId = tenantDao.findActiveTenantIdByCode(tenantHeader.trim()).orElse(null);
+        Long tenantId = tenantRepository.findActiveTenantIdByCode(tenantHeader.trim()).orElse(null);
         if (tenantId == null) {
             writeError(response, "TENANT_NOT_FOUND", "Unknown or inactive tenant: " + tenantHeader);
             return;
@@ -78,16 +76,10 @@ public class TenantContextFilter extends OncePerRequestFilter {
         try {
             filterChain.doFilter(request, response);
         } finally {
-            // Never leak tenant context across pooled threads/requests
             TenantContext.clear();
         }
     }
 
-    /**
-     * Writes a consistent ApiError JSON response.
-     * Filters cannot throw exceptions handled by @RestControllerAdvice,
-     * so the error response is written directly here.
-     */
     private void writeError(HttpServletResponse response, String code, String message)
             throws IOException {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

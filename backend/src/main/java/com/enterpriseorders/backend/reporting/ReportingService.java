@@ -3,40 +3,44 @@ package com.enterpriseorders.backend.reporting;
 import com.enterpriseorders.backend.exception.RefreshRateLimitException;
 import com.enterpriseorders.backend.reporting.ReportingDao.OrderDailySummary;
 import com.enterpriseorders.backend.reporting.ReportingDao.ProductSalesSummary;
+import com.enterpriseorders.backend.reporting.infrastructure.RefreshRateLimiter;
+import com.enterpriseorders.backend.reporting.port.input.GetDailyOrdersQuery;
+import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
+import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedViewsUseCase;
+import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 
 @Service
-public class ReportingService {
+public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuery, RefreshMaterializedViewsUseCase {
 
-    private final ReportingDao reportingDao;
-    private final AtomicLong lastRefreshTime = new AtomicLong(0);
-    private static final long REFRESH_COOLDOWN_MS = 60_000; // 1 minute
+    private final ReportingQueryPort reportingQueryPort;
+    private final RefreshRateLimiter rateLimiter;
 
-    public ReportingService(ReportingDao reportingDao) {
-        this.reportingDao = reportingDao;
+    public ReportingService(ReportingQueryPort reportingQueryPort, RefreshRateLimiter rateLimiter) {
+        this.reportingQueryPort = reportingQueryPort;
+        this.rateLimiter = rateLimiter;
     }
 
+    @Override
     public List<OrderDailySummary> getDailyOrders() {
-        return reportingDao.getDailyOrders();
+        return reportingQueryPort.getDailyOrders();
     }
 
+    @Override
     public List<ProductSalesSummary> getTopProducts(int limit) {
-        return reportingDao.getTopProducts(limit);
+        return reportingQueryPort.getTopProducts(limit);
     }
 
+    @Override
     public void refreshMaterializedViews() {
-        long now = System.currentTimeMillis();
-        long lastRefresh = lastRefreshTime.get();
-        if (now - lastRefresh < REFRESH_COOLDOWN_MS) {
+        if (!rateLimiter.canRefresh()) {
             throw new RefreshRateLimitException(
                     "Materialized view refresh rate limit exceeded. Wait " +
-                    ((REFRESH_COOLDOWN_MS - (now - lastRefresh)) / 1000) + " seconds.");
+                    rateLimiter.getRemainingCooldownMs() + " seconds.");
         }
-        if (lastRefreshTime.compareAndSet(lastRefresh, now)) {
-            reportingDao.refreshMaterializedViews();
-        }
+        rateLimiter.recordRefresh();
+        reportingQueryPort.refreshMaterializedViews();
     }
 }

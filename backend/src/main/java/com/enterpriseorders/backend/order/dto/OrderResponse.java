@@ -12,6 +12,7 @@ public record OrderResponse(
         Long customerId,
         String status,
         String currency,
-        BigDecimal totalAmount
+        BigDecimal totalAmount,
+        int version
 ) {
 }

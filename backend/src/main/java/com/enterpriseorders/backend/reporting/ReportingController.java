@@ -2,6 +2,9 @@ package com.enterpriseorders.backend.reporting;
 
 import com.enterpriseorders.backend.reporting.ReportingDao.OrderDailySummary;
 import com.enterpriseorders.backend.reporting.ReportingDao.ProductSalesSummary;
+import com.enterpriseorders.backend.reporting.port.input.GetDailyOrdersQuery;
+import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
+import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedViewsUseCase;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -15,26 +18,32 @@ import java.util.List;
 @RequestMapping("/api/v1/reports")
 public class ReportingController {
 
-    private final ReportingService reportingService;
+    private final GetDailyOrdersQuery getDailyOrdersQuery;
+    private final GetTopProductsQuery getTopProductsQuery;
+    private final RefreshMaterializedViewsUseCase refreshMaterializedViewsUseCase;
 
-    public ReportingController(ReportingService reportingService) {
-        this.reportingService = reportingService;
+    public ReportingController(GetDailyOrdersQuery getDailyOrdersQuery,
+                               GetTopProductsQuery getTopProductsQuery,
+                               RefreshMaterializedViewsUseCase refreshMaterializedViewsUseCase) {
+        this.getDailyOrdersQuery = getDailyOrdersQuery;
+        this.getTopProductsQuery = getTopProductsQuery;
+        this.refreshMaterializedViewsUseCase = refreshMaterializedViewsUseCase;
     }
 
     @GetMapping("/orders/daily")
     public ResponseEntity<List<OrderDailySummary>> dailyOrders() {
-        return ResponseEntity.ok(reportingService.getDailyOrders());
+        return ResponseEntity.ok(getDailyOrdersQuery.getDailyOrders());
     }
 
     @GetMapping("/products/top")
     public ResponseEntity<List<ProductSalesSummary>> topProducts(
             @RequestParam(defaultValue = "10") int limit) {
-        return ResponseEntity.ok(reportingService.getTopProducts(limit));
+        return ResponseEntity.ok(getTopProductsQuery.getTopProducts(limit));
     }
 
     @PostMapping("/refresh")
     public ResponseEntity<Void> refresh() {
-        reportingService.refreshMaterializedViews();
+        refreshMaterializedViewsUseCase.refreshMaterializedViews();
         return ResponseEntity.noContent().build();
     }
 }
