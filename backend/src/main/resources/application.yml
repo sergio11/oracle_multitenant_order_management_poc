@@ -32,6 +32,13 @@ oracle:
     inactive-connection-timeout: 300
     validate-connection-on-borrow: true
 
+app:
+  security:
+    admin:
+      password: ${APP_ADMIN_PASSWORD:changeme}
+    operator:
+      password: ${APP_OPERATOR_PASSWORD:changeme}
+
 management:
   endpoints:
     web:

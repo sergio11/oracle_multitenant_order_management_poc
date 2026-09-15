@@ -31,7 +31,7 @@ services:
     environment:
       ORACLE_SID: ${ORACLE_SID:-CDB1}
       ORACLE_PDB: ${ORACLE_PDB:-PDB_OLTP}
-      ORACLE_PWD: ${ORACLE_PWD:-ChangeMe123!}
+      ORACLE_PWD: ${ORACLE_PWD}
     ports:
       - "${ORACLE_LISTENER_PORT:-1521}:1521"
     volumes:

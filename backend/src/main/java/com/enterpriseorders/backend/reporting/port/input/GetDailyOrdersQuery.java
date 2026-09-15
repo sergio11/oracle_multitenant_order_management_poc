@@ -1,6 +1,6 @@
 package com.enterpriseorders.backend.reporting.port.input;
 
-import com.enterpriseorders.backend.reporting.ReportingDao.OrderDailySummary;
+import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
 
 import java.util.List;
 

@@ -122,8 +122,13 @@ class OrderServiceTest {
     @Test
     void shouldConfirmOrderAndMarkIdempotency() {
         OrderResponse confirmedOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CONFIRMED", "USD", null, 0);
+        doNothing().when(orderRepository).confirm(eq(TENANT_ID), eq(1L), anyString(), any());
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(confirmedOrder);
         when(idempotentExecutor.execute(eq(TENANT_ID), eq("idem-123"), eq("CONFIRM_ORDER"), eq(1L), any()))
-                .thenReturn(confirmedOrder);
+                .thenAnswer(invocation -> {
+                    java.util.function.Supplier<OrderResponse> action = invocation.getArgument(4);
+                    return action.get();
+                });
 
         OrderResponse result = orderService.confirmOrder(1L, "idem-123");
 

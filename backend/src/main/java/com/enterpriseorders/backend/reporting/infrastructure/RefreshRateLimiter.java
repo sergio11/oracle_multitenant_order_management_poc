@@ -26,7 +26,10 @@ public class RefreshRateLimiter {
         return (COOLDOWN_MS - elapsed) / 1000;
     }
 
-    public void recordRefresh() {
-        lastRefreshTime.set(System.currentTimeMillis());
+    public boolean tryAcquire() {
+        long now = System.currentTimeMillis();
+        long last = lastRefreshTime.get();
+        if (now - last < COOLDOWN_MS) return false;
+        return lastRefreshTime.compareAndSet(last, now);
     }
 }

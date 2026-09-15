@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -40,16 +41,22 @@ public class SecurityConfig {
         return http.build();
     }
 
+    @Value("${app.security.admin.password:changeme}")
+    private String adminPassword;
+
+    @Value("${app.security.operator.password:changeme}")
+    private String operatorPassword;
+
     @Bean
     public UserDetailsService userDetailsService(PasswordEncoder encoder) {
         var admin = User.builder()
             .username("admin")
-            .password(encoder.encode("admin123"))
+            .password(encoder.encode(adminPassword))
             .roles("ADMIN", "ORDER_OPERATOR")
             .build();
         var operator = User.builder()
             .username("operator")
-            .password(encoder.encode("operator123"))
+            .password(encoder.encode(operatorPassword))
             .roles("ORDER_OPERATOR")
             .build();
         return new InMemoryUserDetailsManager(admin, operator);

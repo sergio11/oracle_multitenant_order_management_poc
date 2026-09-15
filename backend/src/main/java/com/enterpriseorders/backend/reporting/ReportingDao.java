@@ -1,6 +1,8 @@
 package com.enterpriseorders.backend.reporting;
 
 import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
+import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
+import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
 import com.enterpriseorders.backend.tenant.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -75,28 +77,4 @@ public class ReportingDao implements ReportingQueryPort {
         jdbcTemplate.execute("BEGIN DBMS_MVIEW.REFRESH('MV_ORDER_DAILY_SUMMARY, MV_PRODUCT_SALES_SUMMARY', 'C'); END;");
     }
 
-    /**
-     * DTO for daily order summary.
-     */
-    public record OrderDailySummary(
-            Long tenantId,
-            LocalDate orderDate,
-            Long orderCount,
-            BigDecimal totalRevenue,
-            BigDecimal averageOrderValue
-    ) {
-    }
-
-    /**
-     * DTO for product sales summary.
-     */
-    public record ProductSalesSummary(
-            Long tenantId,
-            Long productId,
-            LocalDate period,
-            Long quantitySold,
-            BigDecimal revenue,
-            Long orderCount
-    ) {
-    }
 }

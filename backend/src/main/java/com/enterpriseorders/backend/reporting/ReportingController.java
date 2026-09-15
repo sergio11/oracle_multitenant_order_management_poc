@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.reporting;
 
-import com.enterpriseorders.backend.reporting.ReportingDao.OrderDailySummary;
-import com.enterpriseorders.backend.reporting.ReportingDao.ProductSalesSummary;
+import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
+import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
 import com.enterpriseorders.backend.reporting.port.input.GetDailyOrdersQuery;
 import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
 import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedViewsUseCase;

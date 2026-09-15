@@ -76,23 +76,14 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     @Transactional
     public OrderResponse confirmOrder(Long orderId, String idempotencyKey) {
         Long tenantId = currentTenantId();
-
-        OrderResponse result = idempotentExecutor.execute(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId,
+        String payload = serializeIdempotentPayload(java.util.Map.of("orderId", orderId));
+        return idempotentExecutor.execute(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId,
             () -> {
                 orderRepository.confirm(tenantId, orderId, ACTOR, MDC.get("correlationId"));
-                return orderRepository.findById(tenantId, orderId);
+                OrderResponse response = orderRepository.findById(tenantId, orderId);
+                markIdempotentCompleted(tenantId, idempotencyKey, payload);
+                return response;
             });
-
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            try {
-                idempotencyStore.markCompleted(tenantId, idempotencyKey,
-                    objectMapper.writeValueAsString(java.util.Map.of("orderId", orderId)));
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to serialize idempotency result", e);
-            }
-        }
-
-        return result;
     }
 
     @Transactional
@@ -112,24 +103,15 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                                          BigDecimal amount, String currency,
                                          String paymentMethod, String idempotencyKey) {
         Long tenantId = currentTenantId();
-
-        OrderResponse result = idempotentExecutor.execute(tenantId, idempotencyKey, "PAYMENT", orderId,
+        String payload = serializeIdempotentPayload(java.util.Map.of("orderId", orderId, "paymentRef", paymentRef));
+        return idempotentExecutor.execute(tenantId, idempotencyKey, "PAYMENT", orderId,
             () -> {
                 orderRepository.registerPayment(tenantId, orderId, paymentRef, amount, currency,
                     paymentMethod, ACTOR, MDC.get("correlationId"));
-                return orderRepository.findById(tenantId, orderId);
+                OrderResponse response = orderRepository.findById(tenantId, orderId);
+                markIdempotentCompleted(tenantId, idempotencyKey, payload);
+                return response;
             });
-
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            try {
-                idempotencyStore.markCompleted(tenantId, idempotencyKey,
-                    objectMapper.writeValueAsString(java.util.Map.of("orderId", orderId, "paymentRef", paymentRef)));
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to serialize idempotency result", e);
-            }
-        }
-
-        return result;
     }
 
     @Transactional(readOnly = true)
@@ -144,5 +126,23 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
             throw new IllegalStateException("Tenant context not set");
         }
         return tenantId;
+    }
+
+    private void markIdempotentCompleted(Long tenantId, String idempotencyKey, String payload) {
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            try {
+                idempotencyStore.markCompleted(tenantId, idempotencyKey, payload);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to mark idempotency key as completed", e);
+            }
+        }
+    }
+
+    private String serializeIdempotentPayload(java.util.Map<String, Object> data) {
+        try {
+            return objectMapper.writeValueAsString(data);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize idempotency payload", e);
+        }
     }
 }

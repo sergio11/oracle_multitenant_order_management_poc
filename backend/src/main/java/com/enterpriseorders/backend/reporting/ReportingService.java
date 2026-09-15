@@ -1,8 +1,8 @@
 package com.enterpriseorders.backend.reporting;
 
 import com.enterpriseorders.backend.exception.RefreshRateLimitException;
-import com.enterpriseorders.backend.reporting.ReportingDao.OrderDailySummary;
-import com.enterpriseorders.backend.reporting.ReportingDao.ProductSalesSummary;
+import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
+import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
 import com.enterpriseorders.backend.reporting.infrastructure.RefreshRateLimiter;
 import com.enterpriseorders.backend.reporting.port.input.GetDailyOrdersQuery;
 import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
@@ -35,12 +35,11 @@ public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuer
 
     @Override
     public void refreshMaterializedViews() {
-        if (!rateLimiter.canRefresh()) {
+        if (!rateLimiter.tryAcquire()) {
             throw new RefreshRateLimitException(
                     "Materialized view refresh rate limit exceeded. Wait " +
                     rateLimiter.getRemainingCooldownMs() + " seconds.");
         }
-        rateLimiter.recordRefresh();
         reportingQueryPort.refreshMaterializedViews();
     }
 }
