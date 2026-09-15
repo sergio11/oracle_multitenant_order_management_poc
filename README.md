@@ -2,7 +2,7 @@
 
 # 🏢 Enterprise Order Platform
 
-### *Oracle Database como Plataforma Enterprise de Aplicaciones*
+### *Resilient Enterprise Architecture on Oracle 23c: Zero Downtime, Active-Active Clustering & Disaster Recovery*
 
 **🗃️ Multi-Tenancy · 🔷 Hexagonal Architecture · ⚡ PL/SQL · 🔒 VPD · 🔄 Idempotency · 📦 Transactional Outbox**
 
