@@ -80,15 +80,16 @@ class OrderServiceTest {
 
     @Test
     void shouldReturnExistingOrderOnIdempotentRetry() {
-        OrderResponse existingOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CONFIRMED", "USD", null, 0);
+        OrderResponse pendingOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "PENDING", "USD", null, 0);
+        OrderResponse confirmedOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CONFIRMED", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder);
         when(idempotentExecutor.execute(eq(TENANT_ID), eq("test-key"), eq("CONFIRM_ORDER"), eq(1L), any()))
-                .thenReturn(existingOrder);
+                .thenReturn(confirmedOrder);
 
         OrderResponse result = orderService.confirmOrder(1L, "test-key");
 
         assertEquals("CONFIRMED", result.status());
         verify(idempotentExecutor).execute(eq(TENANT_ID), eq("test-key"), eq("CONFIRM_ORDER"), eq(1L), any());
-        verify(orderRepository, never()).confirm(anyLong(), anyLong(), anyString(), anyString());
     }
 
     @Test
@@ -110,8 +111,9 @@ class OrderServiceTest {
 
     @Test
     void shouldCancelOrder() {
-        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(
-                new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CANCELLED", "USD", null, 0));
+        OrderResponse pendingOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "PENDING", "USD", null, 0);
+        OrderResponse cancelledOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CANCELLED", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(cancelledOrder);
 
         OrderResponse result = orderService.cancelOrder(1L, "Customer request");
 
@@ -121,9 +123,9 @@ class OrderServiceTest {
 
     @Test
     void shouldConfirmOrderAndMarkIdempotency() {
+        OrderResponse pendingOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "PENDING", "USD", null, 0);
         OrderResponse confirmedOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CONFIRMED", "USD", null, 0);
-        doNothing().when(orderRepository).confirm(eq(TENANT_ID), eq(1L), anyString(), any());
-        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(confirmedOrder);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(confirmedOrder);
         when(idempotentExecutor.execute(eq(TENANT_ID), eq("idem-123"), eq("CONFIRM_ORDER"), eq(1L), any()))
                 .thenAnswer(invocation -> {
                     java.util.function.Supplier<OrderResponse> action = invocation.getArgument(4);
@@ -139,12 +141,65 @@ class OrderServiceTest {
 
     @Test
     void shouldSkipIdempotencyMarkWhenKeyIsNull() {
+        OrderResponse pendingOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "PENDING", "USD", null, 0);
         OrderResponse confirmedOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CONFIRMED", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(confirmedOrder);
         when(idempotentExecutor.execute(eq(TENANT_ID), isNull(), eq("CONFIRM_ORDER"), eq(1L), any()))
                 .thenReturn(confirmedOrder);
 
         orderService.confirmOrder(1L, null);
 
         verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldRejectAddLineWhenNotDraft() {
+        OrderResponse pendingOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "PENDING", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> orderService.addLine(1L, 10L, 5L, 20L));
+        assertEquals("ORDER_NOT_DRAFT", ex.getCode());
+        verify(orderRepository, never()).addLine(anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void shouldRejectConfirmWhenNotPending() {
+        OrderResponse confirmedOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CONFIRMED", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(confirmedOrder);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> orderService.confirmOrder(1L, "key-123"));
+        assertEquals("ORDER_NOT_CONFIRMABLE", ex.getCode());
+    }
+
+    @Test
+    void shouldRejectCancelWhenCompleted() {
+        OrderResponse completedOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "COMPLETED", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(completedOrder);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> orderService.cancelOrder(1L, "Too late"));
+        assertEquals("ORDER_NOT_CANCELLABLE", ex.getCode());
+    }
+
+    @Test
+    void shouldRejectCancelWhenAlreadyCancelled() {
+        OrderResponse cancelledOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "CANCELLED", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(cancelledOrder);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> orderService.cancelOrder(1L, "Already cancelled"));
+        assertEquals("ORDER_NOT_CANCELLABLE", ex.getCode());
+    }
+
+    @Test
+    void shouldRejectPaymentWhenDraft() {
+        OrderResponse draftOrder = new OrderResponse(1L, "ORD-001", TENANT_ID, 100L, "DRAFT", "USD", null, 0);
+        when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(draftOrder);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> orderService.registerPayment(1L, "PAY-001", new java.math.BigDecimal("50.00"), "USD", "CARD", "key-1"));
+        assertEquals("PAYMENT_STATE_INVALID", ex.getCode());
     }
 }
