@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.order;
 
+import com.enterpriseorders.backend.order.dto.CancelOrderRequest;
 import com.enterpriseorders.backend.order.dto.CreateOrderRequest;
 import com.enterpriseorders.backend.order.dto.OrderLineRequest;
 import com.enterpriseorders.backend.order.dto.OrderResponse;
@@ -85,8 +86,11 @@ public class OrderController {
     }
 
     @PostMapping("/{id}/cancel")
-    public ResponseEntity<OrderResponse> cancelOrder(@PathVariable Long id) {
-        return ResponseEntity.ok(cancelOrderUseCase.cancelOrder(id, null));
+    public ResponseEntity<OrderResponse> cancelOrder(
+            @PathVariable Long id,
+            @Valid @RequestBody(required = false) CancelOrderRequest request) {
+        String reason = request != null ? request.reason() : null;
+        return ResponseEntity.ok(cancelOrderUseCase.cancelOrder(id, reason));
     }
 
     @PostMapping("/{id}/payments")

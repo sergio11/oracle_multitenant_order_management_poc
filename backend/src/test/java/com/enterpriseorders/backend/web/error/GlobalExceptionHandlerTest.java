@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
@@ -95,5 +97,37 @@ class GlobalExceptionHandlerTest {
         String msg = response.getBody().message();
         assertTrue(msg.contains("customerId"));
         assertTrue(msg.contains("currency"));
+    }
+
+    @Test
+    void shouldHandleDataAccessException() {
+        DataAccessException ex = new DataAccessResourceFailureException("Connection lost");
+        ResponseEntity<ApiError> response = exceptionHandler.handleDataAccess(ex, request);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        assertEquals("DATABASE_ERROR", response.getBody().code());
+    }
+
+    @Test
+    void shouldHandleIllegalStateExceptionAsGeneric() {
+        IllegalStateException ex = new IllegalStateException("Tenant context not set");
+        ResponseEntity<ApiError> response = exceptionHandler.handleGeneric(ex, request);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        assertEquals("INTERNAL_ERROR", response.getBody().code());
+    }
+
+    @Test
+    void shouldIncludeCorrelationIdInDatabaseError() {
+        when(request.getHeader("X-Correlation-ID")).thenReturn("db-corr-456");
+        var ex = new DatabaseException("DATABASE_ERROR", "Timeout", new RuntimeException(), "08001");
+        ResponseEntity<ApiError> response = exceptionHandler.handleDatabase(ex, request);
+        assertEquals("db-corr-456", response.getBody().correlationId());
+    }
+
+    @Test
+    void shouldReturnNullCorrelationIdWhenHeaderMissing() {
+        when(request.getHeader("X-Correlation-ID")).thenReturn(null);
+        var ex = new BusinessException("TEST", "test", 400);
+        ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
+        assertNull(response.getBody().correlationId());
     }
 }

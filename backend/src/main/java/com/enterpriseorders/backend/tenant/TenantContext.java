@@ -3,29 +3,21 @@ package com.enterpriseorders.backend.tenant;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextProvider;
 import org.springframework.stereotype.Component;
 
-/**
- * Holds the resolved tenant id for the current request (SRS §13, §52).
- *
- * The value is set by TenantContextFilter from the authenticated identity
- * (for the POC: validated X-Tenant-ID header). It is propagated to the
- * Oracle session via pkg_tenant.set_tenant_context so VPD can enforce
- * isolation (defense in depth, SRS §14).
- */
 @Component
 public class TenantContext implements TenantContextProvider {
 
-    private static final ThreadLocal<Long> CURRENT_TENANT = new ThreadLocal<>();
+    private final ThreadLocal<Long> currentTenant = new ThreadLocal<>();
 
     @Override
     public Long getTenantId() {
-        return CURRENT_TENANT.get();
+        return currentTenant.get();
     }
 
-    public static void setTenantId(Long tenantId) {
-        CURRENT_TENANT.set(tenantId);
+    public void setTenantId(Long tenantId) {
+        currentTenant.set(tenantId);
     }
 
-    public static void clear() {
-        CURRENT_TENANT.remove();
+    public void clear() {
+        currentTenant.remove();
     }
 }

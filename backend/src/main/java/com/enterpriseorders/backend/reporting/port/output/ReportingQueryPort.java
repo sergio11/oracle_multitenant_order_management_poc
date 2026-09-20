@@ -8,5 +8,4 @@ import java.util.List;
 public interface ReportingQueryPort {
     List<OrderDailySummary> getDailyOrders();
     List<ProductSalesSummary> getTopProducts(int limit);
-    void refreshMaterializedViews();
 }

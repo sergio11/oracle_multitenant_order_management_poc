@@ -67,6 +67,10 @@ public class Order {
         this.lines.add(line);
     }
 
+    /**
+     * Computes the total from order lines for Java-side validation.
+     * The canonical total is maintained by PL/SQL in the database.
+     */
     public Money calculateTotal() {
         return lines.stream()
             .map(OrderLine::lineTotal)

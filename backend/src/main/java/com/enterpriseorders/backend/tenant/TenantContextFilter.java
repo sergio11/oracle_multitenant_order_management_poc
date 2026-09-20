@@ -35,10 +35,12 @@ public class TenantContextFilter extends OncePerRequestFilter {
     public static final String TENANT_HEADER = "X-Tenant-ID";
 
     private final TenantRepository tenantRepository;
+    private final TenantContext tenantContext;
     private final ObjectMapper objectMapper;
 
-    public TenantContextFilter(TenantRepository tenantRepository, ObjectMapper objectMapper) {
+    public TenantContextFilter(TenantRepository tenantRepository, TenantContext tenantContext, ObjectMapper objectMapper) {
         this.tenantRepository = tenantRepository;
+        this.tenantContext = tenantContext;
         this.objectMapper = objectMapper;
     }
 
@@ -66,17 +68,23 @@ public class TenantContextFilter extends OncePerRequestFilter {
             return;
         }
 
-        Long tenantId = tenantRepository.findActiveTenantIdByCode(tenantHeader.trim()).orElse(null);
+        Long tenantId;
+        try {
+            tenantId = tenantRepository.findActiveTenantIdByCode(tenantHeader.trim()).orElse(null);
+        } catch (Exception e) {
+            writeError(response, "TENANT_RESOLUTION_ERROR", "Tenant resolution temporarily unavailable");
+            return;
+        }
         if (tenantId == null) {
             writeError(response, "TENANT_NOT_FOUND", "Unknown or inactive tenant: " + tenantHeader);
             return;
         }
 
-        TenantContext.setTenantId(tenantId);
+        tenantContext.setTenantId(tenantId);
         try {
             filterChain.doFilter(request, response);
         } finally {
-            TenantContext.clear();
+            tenantContext.clear();
         }
     }
 

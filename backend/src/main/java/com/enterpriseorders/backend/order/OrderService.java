@@ -1,5 +1,7 @@
 package com.enterpriseorders.backend.order;
 
+import com.enterpriseorders.backend.common.domain.OrderStatus;
+import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.order.dto.OrderResponse;
 import com.enterpriseorders.backend.order.infrastructure.IdempotentOperationExecutor;
 import com.enterpriseorders.backend.order.port.input.AddOrderLineUseCase;
@@ -18,18 +20,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
-/**
- * Order lifecycle service (SRS §33, §53, §96).
- *
- * Orchestrates the order workflow (CREATE -> CONFIRM -> PAY -> CANCEL)
- * delegating the atomic DB operations to the PL/SQL packages via
- * OrderRepository. Sensitive operations (confirm, pay) implement idempotency
- * via the IdempotentOperationExecutor (FR-014, SRS §62, FT-004).
- *
- * Outbox events are written ATOMICALLY by PL/SQL within the same
- * transaction as the business mutation (SRS §63, BR-011). Java does
- * NOT write outbox events to avoid duplication.
- */
 @Service
 public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                                      ConfirmOrderUseCase, CancelOrderUseCase,
@@ -64,18 +54,25 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     @Transactional
     public OrderResponse addLine(Long orderId, Long productId, Long quantity, Long warehouseId) {
         Long tenantId = currentTenantId();
+        OrderResponse current = orderRepository.findById(tenantId, orderId);
+        OrderStatus status = OrderStatus.fromString(current.status());
+        if (status != OrderStatus.DRAFT) {
+            throw new BusinessException("ORDER_NOT_DRAFT",
+                    "Cannot add lines to a non-DRAFT order", 400);
+        }
         orderRepository.addLine(tenantId, orderId, productId, quantity, warehouseId);
         return orderRepository.findById(tenantId, orderId);
     }
 
-    /**
-     * Confirms an order. Idempotent: repeats with the same Idempotency-Key
-     * return the existing result without double-reserving inventory (FR-014).
-     * Outbox event is written atomically by PL/SQL within confirm_order (SRS §63).
-     */
     @Transactional
     public OrderResponse confirmOrder(Long orderId, String idempotencyKey) {
         Long tenantId = currentTenantId();
+        OrderResponse current = orderRepository.findById(tenantId, orderId);
+        OrderStatus status = OrderStatus.fromString(current.status());
+        if (status != OrderStatus.PENDING) {
+            throw new BusinessException("ORDER_NOT_CONFIRMABLE",
+                    "Order cannot be confirmed from current status", 400);
+        }
         String payload = serializeIdempotentPayload(java.util.Map.of("orderId", orderId));
         return idempotentExecutor.execute(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId,
             () -> {
@@ -89,20 +86,27 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     @Transactional
     public OrderResponse cancelOrder(Long orderId, String reason) {
         Long tenantId = currentTenantId();
+        OrderResponse current = orderRepository.findById(tenantId, orderId);
+        OrderStatus status = OrderStatus.fromString(current.status());
+        if (status == OrderStatus.COMPLETED || status == OrderStatus.CANCELLED) {
+            throw new BusinessException("ORDER_NOT_CANCELLABLE",
+                    "Order cannot be cancelled from current status", 400);
+        }
         orderRepository.cancel(tenantId, orderId, reason, ACTOR, MDC.get("correlationId"));
         return orderRepository.findById(tenantId, orderId);
     }
 
-    /**
-     * Registers a payment. Idempotent by payment reference (FR-011,
-     * FR-014). The unique payment_reference constraint prevents double
-     * payment under retries. Outbox event is written atomically by PL/SQL.
-     */
     @Transactional
     public OrderResponse registerPayment(Long orderId, String paymentRef,
                                          BigDecimal amount, String currency,
                                          String paymentMethod, String idempotencyKey) {
         Long tenantId = currentTenantId();
+        OrderResponse current = orderRepository.findById(tenantId, orderId);
+        OrderStatus status = OrderStatus.fromString(current.status());
+        if (status != OrderStatus.CONFIRMED && status != OrderStatus.ALLOCATED && status != OrderStatus.PAID) {
+            throw new BusinessException("PAYMENT_STATE_INVALID",
+                    "Payment requires order CONFIRMED or later", 400);
+        }
         String payload = serializeIdempotentPayload(java.util.Map.of("orderId", orderId, "paymentRef", paymentRef));
         return idempotentExecutor.execute(tenantId, idempotencyKey, "PAYMENT", orderId,
             () -> {

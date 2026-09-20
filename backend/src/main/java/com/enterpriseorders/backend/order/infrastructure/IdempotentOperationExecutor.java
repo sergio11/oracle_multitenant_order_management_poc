@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.order.infrastructure;
 
+import com.enterpriseorders.backend.order.dto.OrderResponse;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import org.springframework.stereotype.Component;
@@ -17,21 +18,17 @@ public class IdempotentOperationExecutor {
         this.orderRepository = orderRepository;
     }
 
-    public <T> T execute(Long tenantId, String idempotencyKey, String operation,
-                         Long aggregateId, Supplier<T> action) {
+    public OrderResponse execute(Long tenantId, String idempotencyKey, String operation,
+                                 Long aggregateId, Supplier<OrderResponse> action) {
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             var existing = idempotencyStore.findByKey(tenantId, idempotencyKey);
             if (existing.isPresent()) {
-                @SuppressWarnings("unchecked")
-                T result = (T) orderRepository.findById(tenantId, existing.get().aggregateId());
-                return result;
+                return orderRepository.findById(tenantId, existing.get().aggregateId());
             }
             if (!idempotencyStore.insertPending(tenantId, idempotencyKey, operation, aggregateId)) {
                 var raceResult = idempotencyStore.findByKey(tenantId, idempotencyKey);
                 if (raceResult.isPresent()) {
-                    @SuppressWarnings("unchecked")
-                    T result = (T) orderRepository.findById(tenantId, raceResult.get().aggregateId());
-                    return result;
+                    return orderRepository.findById(tenantId, raceResult.get().aggregateId());
                 }
             }
         }

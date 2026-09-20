@@ -8,6 +8,7 @@ import com.enterpriseorders.backend.reporting.port.input.GetDailyOrdersQuery;
 import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
 import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedViewsUseCase;
 import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
+import com.enterpriseorders.backend.reporting.port.output.RefreshMaterializedViewsPort;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -16,10 +17,12 @@ import java.util.List;
 public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuery, RefreshMaterializedViewsUseCase {
 
     private final ReportingQueryPort reportingQueryPort;
+    private final RefreshMaterializedViewsPort refreshPort;
     private final RefreshRateLimiter rateLimiter;
 
-    public ReportingService(ReportingQueryPort reportingQueryPort, RefreshRateLimiter rateLimiter) {
+    public ReportingService(ReportingQueryPort reportingQueryPort, RefreshMaterializedViewsPort refreshPort, RefreshRateLimiter rateLimiter) {
         this.reportingQueryPort = reportingQueryPort;
+        this.refreshPort = refreshPort;
         this.rateLimiter = rateLimiter;
     }
 
@@ -40,6 +43,6 @@ public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuer
                     "Materialized view refresh rate limit exceeded. Wait " +
                     rateLimiter.getRemainingCooldownMs() + " seconds.");
         }
-        reportingQueryPort.refreshMaterializedViews();
+        refreshPort.refreshMaterializedViews();
     }
 }

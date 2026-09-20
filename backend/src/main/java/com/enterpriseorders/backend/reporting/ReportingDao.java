@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.reporting;
 
+import com.enterpriseorders.backend.reporting.port.output.RefreshMaterializedViewsPort;
 import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
 import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
 import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
@@ -18,7 +19,7 @@ import java.util.List;
  * appended by Oracle), so reports are automatically tenant-isolated.
  */
 @Repository
-public class ReportingDao implements ReportingQueryPort {
+public class ReportingDao implements ReportingQueryPort, RefreshMaterializedViewsPort {
 
     private final JdbcTemplate jdbcTemplate;
 
