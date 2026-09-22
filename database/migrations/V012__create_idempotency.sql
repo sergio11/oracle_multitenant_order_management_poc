@@ -31,6 +31,6 @@ COMMENT ON COLUMN idempotency_key.idempotency_key IS 'Client-provided Idempotenc
 COMMENT ON COLUMN idempotency_key.aggregate_id IS 'Resulting order id (or target entity id)';
 COMMENT ON COLUMN idempotency_key.status IS 'COMPLETED | FAILED';
 
--- Index for fast tenant-scoped lookups by idempotency key
-CREATE INDEX idx_idem_tenant_key ON idempotency_key (tenant_id, idempotency_key);
-</content>
+-- NOTE: no separate index on (tenant_id, idempotency_key) - the
+-- uq_idem_tenant_key UNIQUE constraint above already creates one on the
+-- same leading columns (a second CREATE INDEX raises ORA-01408).

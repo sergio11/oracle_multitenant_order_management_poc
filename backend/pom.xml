@@ -21,7 +21,10 @@
         <java.version>21</java.version>
         <oracle.jdbc.version>23.4.0.24.05</oracle.jdbc.version>
         <flyway.version>10.20.1</flyway.version>
-        <flyway.oracle.version>10.20.1</flyway.oracle.version>
+        <!-- NOTE: must NOT be named flyway.* - the flyway-maven-plugin treats
+             any flyway.* Maven property as plugin configuration and fails on
+             unknown keys ("Unknown configuration property"). -->
+        <flyway-oracle.version>10.20.1</flyway-oracle.version>
         <!-- flyway-maven-plugin connection defaults (override with -Dflyway.*).
              Password has NO pom default: pass -Dflyway.password=... at invoke. -->
         <flyway.url>jdbc:oracle:thin:@localhost:1521/pdb_oltp</flyway.url>
@@ -65,7 +68,7 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-oracle</artifactId>
-            <version>${flyway.oracle.version}</version>
+            <version>${flyway-oracle.version}</version>
         </dependency>
 
         <!-- Observability (SRS 104) - added early for Phase 9 -->

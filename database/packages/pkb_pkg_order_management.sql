@@ -518,4 +518,3 @@ END pkg_order_management;
 -- Grant execute to runtime user (least privilege, SRS 58/59)
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
 GRANT EXECUTE ON pkg_order_management TO app_reporting;
-</content>

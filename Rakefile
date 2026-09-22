@@ -226,11 +226,26 @@ def http_post(url, body, user: nil, headers: {})
   http.request(req)
 end
 
+def mvn_cmd
+  return @mvn_cmd if defined?(@mvn_cmd) && @mvn_cmd
+
+  if ENV['MVN'] && !ENV['MVN'].empty?
+    @mvn_cmd = ENV['MVN']
+  elsif system('where mvn >NUL 2>&1')
+    @mvn_cmd = 'mvn'
+  else
+    # Fall back to a Maven wrapper distribution (Windows default location).
+    hits = Dir.glob(File.join(Dir.home, '.m2', 'wrapper', 'dists', '**', 'bin', 'mvn.cmd'))
+    abort 'Maven not found on PATH and no wrapper dist present - set MVN env var.' if hits.empty?
+
+    @mvn_cmd = hits.max
+  end
+end
+
 def flyway_migrate!
   env = load_env_file
-  mvn = ENV.fetch('MVN', 'mvn')
   url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
-  run!(mvn, '-q', 'flyway:migrate',
+  run!(mvn_cmd, '-q', 'flyway:migrate',
        "-Dflyway.url=#{url}",
        '-Dflyway.user=APP_OWNER',
        "-Dflyway.password=#{env['APP_OWNER_PWD']}",
@@ -249,19 +264,32 @@ def run_sql_as_owner!(script_path_or_stdin, label:)
   pass = env['APP_OWNER_PWD']
   connect = "#{user}/#{pass}@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
 
+  # NOTE: sqlplus exit codes are unreliable (a failed script can still exit
+  # 0), so every path below ALSO scans output for ORA-/SP2- errors.
+  check_output = lambda do |out|
+    puts out unless out.strip.empty?
+    bad = out.lines.grep(/ORA-\d{5}|SP2-\d{4}|PLS-\d{5}/)
+    raise "SQL failed (#{label}): #{bad.first.strip}" unless bad.empty?
+  end
+  show_output = lambda do |out|
+    puts out unless out.strip.empty?
+  end
+
   if sqlplus_available?
     if script_path_or_stdin.is_a?(String) && File.exist?(script_path_or_stdin)
-      run!('sqlplus', '-L', '-S', connect, "@#{script_path_or_stdin}")
+      out = capture!('sqlplus', '-L', '-S', connect, "@#{script_path_or_stdin}")
+      check_output.call(out)
     else
       # Feed SQL on stdin to local sqlplus.
       puts "\n$ sqlplus -L -S <connect>  # stdin (#{label})"
-      IO.popen(['sqlplus', '-L', '-S', connect], 'r+') do |io|
+      out = IO.popen(['sqlplus', '-L', '-S', connect], 'r+') do |io|
         io.write(script_path_or_stdin)
         io.close_write
-        out = io.read
-        puts out unless out.strip.empty?
-        raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
+        io.read
       end
+      raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
+
+      check_output.call(out)
     end
   else
     # No local SQL*Plus: pipe through kubectl into the Oracle pod (has sqlplus).
@@ -278,16 +306,24 @@ def run_sql_as_owner!(script_path_or_stdin, label:)
     SQL
     # gvenzl image exposes sqlplus for OS-auth / app users via tnsping alias
     conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
-    cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, 'statefulset/oracle',
+    pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE, '-l', 'app=oracle',
+                   '-o', 'jsonpath={.items[0].metadata.name}').strip
+    abort 'Oracle pod not found' if pod.empty?
+
+    cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, pod,
            '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)}"]
     puts "\n$ #{cmd.join(' ')}  # via in-pod sqlplus (#{label})"
-    IO.popen(cmd, 'r+') do |io|
+    out = IO.popen(cmd, 'r+') do |io|
       io.write(wrapper)
       io.close_write
-      out = io.read
-      puts out unless out.strip.empty?
-      raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
+      io.read
     end
+    # Always show output BEFORE checking status - otherwise the actual
+    # Oracle error is swallowed when the exit code is the only signal.
+    show_output.call(out)
+    raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
+
+    check_output.call(out)
   end
 end
 
@@ -305,20 +341,24 @@ def run_packages_deploy!
          "@#{deploy}", chdir: packages_dir)
   else
     conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
+    # NOTE: kubectl cp needs a POD name (statefulset/x is not accepted).
+    pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE, '-l', 'app=oracle',
+                   '-o', 'jsonpath={.items[0].metadata.name}').strip
+    abort 'Oracle pod not found' if pod.empty?
+
     # Copy package sources into the pod, then run deploy from that dir.
-    run!('kubectl', 'exec', '-n', NAMESPACE, 'statefulset/oracle', '--',
-         'mkdir', '-p', '/tmp/packages')
+    run!('kubectl', 'exec', '-n', NAMESPACE, pod, '--', 'mkdir', '-p', '/tmp/packages')
+    # NOTE: relative source names - kubectl cp misparses Windows drive
+    # letters (C:/...) as remote filespecs.
     Dir.children(packages_dir).select { |f| f.end_with?('.sql') }.each do |f|
-      run!('kubectl', 'cp', File.join(packages_dir, f),
-           "#{NAMESPACE}/statefulset/oracle:/tmp/packages/#{f}")
+      run!('kubectl', 'cp', f, "#{NAMESPACE}/#{pod}:/tmp/packages/#{f}", chdir: packages_dir)
     end
     script = <<~SH
       set -euo pipefail
       cd /tmp/packages
       sqlplus -L -S #{Shellwords.escape(conn)} @deploy_packages.sql
     SH
-    run!('kubectl', 'exec', '-i', '-n', NAMESPACE, 'statefulset/oracle',
-         '--', 'bash', '-lc', script)
+    run!('kubectl', 'exec', '-i', '-n', NAMESPACE, pod, '--', 'bash', '-lc', script)
   end
 end
 
@@ -429,6 +469,19 @@ namespace :qa do
   end
 
   namespace :db do
+    desc 'Repair Flyway schema history (removes FAILED entries after fixing cause)'
+    task :repair do
+      ensure_cluster!
+      env = load_env_file
+      url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
+      run!(mvn_cmd, '-q', 'flyway:repair',
+           "-Dflyway.url=#{url}",
+           '-Dflyway.user=APP_OWNER',
+           "-Dflyway.password=#{env['APP_OWNER_PWD']}",
+           chdir: BACKEND_DIR)
+      puts 'Flyway repair OK.'
+    end
+
     desc 'Run Flyway migrations (V001-V017) against Oracle NodePort :1521'
     task :migrate do
       ensure_cluster!

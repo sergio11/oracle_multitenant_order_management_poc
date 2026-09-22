@@ -40,4 +40,3 @@ CREATE OR REPLACE PACKAGE BODY pkg_vpd AS
 
 END pkg_vpd;
 /
-</content>

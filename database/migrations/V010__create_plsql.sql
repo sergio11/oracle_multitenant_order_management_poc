@@ -166,4 +166,3 @@ CREATE OR REPLACE PACKAGE pkg_order_management AS
     );
 END pkg_order_management;
 /
-</content>

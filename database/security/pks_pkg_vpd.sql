@@ -18,4 +18,3 @@ CREATE OR REPLACE PACKAGE pkg_vpd AS
 
 END pkg_vpd;
 /
-</content>

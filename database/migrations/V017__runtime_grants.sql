@@ -91,4 +91,6 @@ GRANT EXECUTE ON pkg_inventory        TO app_reporting;
 GRANT EXECUTE ON pkg_audit            TO app_reporting;
 GRANT EXECUTE ON pkg_vpd              TO app_reporting;
 
-PROMPT V017 runtime grants applied successfully.
+-- V017 runtime grants applied successfully.
+-- (NOTE: no PROMPT here - PROMPT is a SQL*Plus command, not SQL;
+-- Flyway would fail with ORA-00900.)

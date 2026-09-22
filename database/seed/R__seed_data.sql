@@ -9,12 +9,16 @@
 -- brand-new or partially-seeded environments.
 --
 -- VPD: since V011, tenant-aware tables carry DBMS_RLS policies with
--- update_check=TRUE. The seed runs as APP_OWNER via Flyway WITHOUT a
--- tenant context, which would fail with ORA-28104 on INSERT/UPDATE.
--- Each tenant section therefore sets APP_CTX.TENANT_ID directly via
--- DBMS_SESSION.SET_CONTEXT (pkg_tenant.set_tenant_context is NOT used:
--- package bodies are only deployed later by deploy_packages.sql) and
--- clears the context at the end of the section.
+-- update_check=TRUE. The seed runs as APP_OWNER WITHOUT a tenant
+-- context, which would fail with ORA-28104 on INSERT/UPDATE.
+-- Each tenant section therefore sets APP_CTX.TENANT_ID via
+-- pkg_tenant.set_tenant_context (the sanctioned path, same as the
+-- backend). Direct DBMS_SESSION.SET_CONTEXT from an anonymous block
+-- is NOT allowed: Oracle only permits SET_CONTEXT on a USING-clause
+-- namespace from within the designated package (ORA-01031 otherwise).
+-- Prerequisite: package bodies must be deployed first
+-- (database/packages/deploy_packages.sql) - the rake qa:db:init flow
+-- runs packages before seed for exactly this reason.
 --=====================================================================
 
 --=====================================================================
@@ -36,7 +40,7 @@ DECLARE
     v_tenant_id NUMBER;
 BEGIN
     SELECT tenant_id INTO v_tenant_id FROM tenant WHERE tenant_code = 'ACME';
-    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', TO_CHAR(v_tenant_id));
+    pkg_tenant.set_tenant_context(v_tenant_id);
 END;
 /
 
@@ -158,7 +162,7 @@ WHEN NOT MATCHED THEN
     VALUES (s.tenant_id, s.order_id, s.product_id, 1, s.unit_price, s.unit_price);
 
 BEGIN
-    DBMS_SESSION.CLEAR_ALL_CONTEXT('APP_CTX');
+    pkg_tenant.clear_tenant_context;
 END;
 /
 
@@ -169,7 +173,7 @@ DECLARE
     v_tenant_id NUMBER;
 BEGIN
     SELECT tenant_id INTO v_tenant_id FROM tenant WHERE tenant_code = 'GLOBEX';
-    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', TO_CHAR(v_tenant_id));
+    pkg_tenant.set_tenant_context(v_tenant_id);
 END;
 /
 
@@ -244,7 +248,7 @@ WHEN NOT MATCHED THEN
     VALUES (s.tenant_id, s.order_id, s.product_id, 1, 99.00, 99.00);
 
 BEGIN
-    DBMS_SESSION.CLEAR_ALL_CONTEXT('APP_CTX');
+    pkg_tenant.clear_tenant_context;
 END;
 /
 
@@ -255,7 +259,7 @@ DECLARE
     v_tenant_id NUMBER;
 BEGIN
     SELECT tenant_id INTO v_tenant_id FROM tenant WHERE tenant_code = 'INITECH';
-    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', TO_CHAR(v_tenant_id));
+    pkg_tenant.set_tenant_context(v_tenant_id);
 END;
 /
 
@@ -304,10 +308,14 @@ WHEN NOT MATCHED THEN
     VALUES (s.tenant_id, s.warehouse_id, s.product_id, s.qty, 0);
 
 BEGIN
-    DBMS_SESSION.CLEAR_ALL_CONTEXT('APP_CTX');
+    pkg_tenant.clear_tenant_context;
 END;
 /
 
 --=====================================================================
 -- End of seed data (context cleared after every tenant section)
 --=====================================================================
+
+-- Explicit commit: sqlplus commits on EXIT, but do not rely on client
+-- behavior (Flyway / JDBC runners differ).
+COMMIT;

@@ -93,4 +93,3 @@ END pkg_audit;
 -- Grant execute to runtime and reporting users (least privilege, SRS 58/59)
 GRANT EXECUTE ON pkg_audit TO app_runtime;
 GRANT EXECUTE ON pkg_audit TO app_reporting;
-</content>

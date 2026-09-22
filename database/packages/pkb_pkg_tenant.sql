@@ -109,4 +109,3 @@ END pkg_tenant;
 -- Grant execute to runtime and reporting users (least privilege, SRS 58/59)
 GRANT EXECUTE ON pkg_tenant TO app_runtime;
 GRANT EXECUTE ON pkg_tenant TO app_reporting;
-</content>

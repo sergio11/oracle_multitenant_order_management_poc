@@ -17,6 +17,22 @@
 --=====================================================================
 
 --=====================================================================
+-- Temporarily drop base-table VPD policies (ORA-30372)
+--
+-- Oracle forbids CREATE MATERIALIZED VIEW over tables protected by
+-- DBMS_RLS policies (V011 put POL_ORDER_TENANT / POL_LINE_TENANT on
+-- SALES_ORDER / SALES_ORDER_LINE). Drop them here, create the MVs,
+-- then re-add them below with IDENTICAL parameters - end state is
+-- unchanged, and V014 adds the MV-level policies on top.
+-- Drops tolerate missing policies so this block is re-runnable.
+--=====================================================================
+BEGIN
+    BEGIN DBMS_RLS.DROP_POLICY('APP_OWNER','SALES_ORDER',     'POL_ORDER_TENANT'); EXCEPTION WHEN OTHERS THEN NULL; END;
+    BEGIN DBMS_RLS.DROP_POLICY('APP_OWNER','SALES_ORDER_LINE','POL_LINE_TENANT');  EXCEPTION WHEN OTHERS THEN NULL; END;
+END;
+/
+
+--=====================================================================
 -- MV_ORDER_DAILY_SUMMARY (SRS §40)
 -- Dimensions: TENANT_ID, ORDER_DATE
 -- Metrics:    ORDER_COUNT, TOTAL_REVENUE, AVERAGE_ORDER_VALUE
@@ -71,4 +87,12 @@ GRANT SELECT ON mv_order_daily_summary   TO app_reporting;
 GRANT SELECT ON mv_product_sales_summary TO app_reporting;
 GRANT SELECT ON mv_order_daily_summary   TO app_runtime;
 GRANT SELECT ON mv_product_sales_summary TO app_runtime;
-</content>
+
+--=====================================================================
+-- Re-add base-table VPD policies (identical to V011 §4)
+--=====================================================================
+BEGIN
+    DBMS_RLS.ADD_POLICY('APP_OWNER','SALES_ORDER',     'POL_ORDER_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+    DBMS_RLS.ADD_POLICY('APP_OWNER','SALES_ORDER_LINE','POL_LINE_TENANT', 'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+END;
+/

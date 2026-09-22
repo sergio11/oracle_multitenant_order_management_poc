@@ -168,4 +168,3 @@ END pkg_inventory;
 -- Grant execute to runtime user (least privilege, SRS 58/59)
 GRANT EXECUTE ON pkg_inventory TO app_runtime;
 GRANT EXECUTE ON pkg_inventory TO app_reporting;
-</content>

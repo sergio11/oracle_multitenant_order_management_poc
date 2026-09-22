@@ -6,9 +6,9 @@
 -- flips it to 'COMPLETED' afterwards -> ORA-02290 on the CHECK
 -- constraint. Allow all three lifecycle states.
 --
--- Also drops idx_idem_tenant_key: it is redundant with the
--- uq_idem_tenant_key UNIQUE constraint (which provides an index on
--- the same leading columns).
+-- NOTE: V012 intentionally creates NO separate index on
+-- (tenant_id, idempotency_key) - uq_idem_tenant_key already provides one
+-- (a second CREATE INDEX raises ORA-01408).
 --=====================================================================
 
 ALTER TABLE idempotency_key DROP CONSTRAINT ck_idem_status;
@@ -17,5 +17,3 @@ ALTER TABLE idempotency_key ADD CONSTRAINT ck_idem_status
     CHECK (status IN ('PENDING','COMPLETED','FAILED'));
 
 COMMENT ON COLUMN idempotency_key.status IS 'PENDING | COMPLETED | FAILED';
-
-DROP INDEX idx_idem_tenant_key;
