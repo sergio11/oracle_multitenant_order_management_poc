@@ -1,0 +1,17 @@
+# kind cluster for local QA (kind + Podman provider).
+# Created via: kind create cluster --name poc-qa --provider podman --config infrastructure/k8s/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: poc-qa
+nodes:
+  - role: control-plane
+    # NodePorts exposed on the host for QA smoke tests / Flyway from the workstation:
+    #   8080 -> backend  (Service NodePort 30080)
+    #   1521 -> Oracle   (Service NodePort 30152)
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 30152
+        hostPort: 1521
+        protocol: TCP

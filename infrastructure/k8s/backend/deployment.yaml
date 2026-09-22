@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: poc-qa
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: enterprise-order-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          # Built by `rake qa:image:build` and loaded by `rake qa:image:load`
+          image: enterprise-orders-qa:0.0.1
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: local
+            - name: ORACLE_URL
+              value: jdbc:oracle:thin:@oracle:1521/pdb_oltp
+            - name: ORACLE_USER
+              value: APP_RUNTIME
+            - name: ORACLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: poc-qa-secrets
+                  key: APP_RUNTIME_PWD
+            - name: APP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: poc-qa-secrets
+                  key: APP_ADMIN_PASSWORD
+            - name: APP_OPERATOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: poc-qa-secrets
+                  key: APP_OPERATOR_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /internal/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /internal/health
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 30
+            failureThreshold: 6

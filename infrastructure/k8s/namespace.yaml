@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: poc-qa
+  labels:
+    app.kubernetes.io/part-of: enterprise-order-platform
+    environment: qa

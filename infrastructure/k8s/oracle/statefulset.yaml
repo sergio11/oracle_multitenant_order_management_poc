@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: oracle
+  namespace: poc-qa
+  labels:
+    app: oracle
+    app.kubernetes.io/part-of: enterprise-order-platform
+spec:
+  serviceName: oracle
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oracle
+  template:
+    metadata:
+      labels:
+        app: oracle
+    spec:
+      containers:
+        - name: oracle
+          image: gvenzl/oracle-free:23-slim
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: tns
+              containerPort: 1521
+          env:
+            - name: ORACLE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: poc-qa-secrets
+                  key: ORACLE_PASSWORD
+            - name: ORACLE_DATABASE
+              value: PDB_OLTP
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          volumeMounts:
+            - name: oracle-data
+              mountPath: /opt/oracle/oradata
+            - name: oracle-init
+              mountPath: /container-entrypoint-initdb.d
+              readOnly: true
+          # First boot (DB create + PDB + init scripts) can take several minutes.
+          startupProbe:
+            exec:
+              command: ["healthcheck.sh"]
+            periodSeconds: 15
+            failureThreshold: 40
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["healthcheck.sh"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["healthcheck.sh"]
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 6
+      volumes:
+        - name: oracle-init
+          configMap:
+            name: oracle-init-scripts
+  volumeClaimTemplates:
+    - metadata:
+        name: oracle-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
