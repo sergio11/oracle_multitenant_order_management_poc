@@ -68,9 +68,13 @@ DEFAULTS = {
 def run!(*args, chdir: nil)
   cmd = args.length == 1 ? args.first : args
   puts "\n$ #{cmd.is_a?(Array) ? cmd.join(' ') : cmd}"
-  opts = {}
-  opts[:chdir] = chdir if chdir
-  success = system(cmd, **opts)
+  argv = cmd.is_a?(Array) ? cmd : [cmd]
+  # NOTE: no kwargs splat - system(str, **{}) raises ArgumentError on Ruby/Windows.
+  success = if chdir
+              Dir.chdir(chdir) { system(*argv) }
+            else
+              system(*argv)
+            end
   return if success
 
   status = $CHILD_STATUS
@@ -333,11 +337,11 @@ namespace :qa do
       if cluster_exists?
         puts "kind cluster '#{CLUSTER_NAME}' already exists - skipping create."
       else
-        # kind detects Podman via CONTAINER_HOST / default machine socket.
+        # kind v0.32 selects Podman via KIND_EXPERIMENTAL_PROVIDER
+        # (there is no --provider flag on `kind create cluster`).
         ENV['KIND_EXPERIMENTAL_PROVIDER'] ||= 'podman'
         run!('kind', 'create', 'cluster',
              '--name', CLUSTER_NAME,
-             '--provider', 'podman',
              '--config', File.join(K8S_DIR, 'kind-config.yaml'),
              '--wait', '120s')
       end
