@@ -23,8 +23,10 @@
 #   rake qa:cluster:delete  # full teardown
 #
 # Or one-shot after images exist:
-#   rake qa:up              # create cluster + build + load + deploy + wait
-#   rake qa:smoke           # after db:* tasks
+#   rake qa:up              # create cluster + build + load + deploy
+#   rake qa:db:init         # migrate + packages + seed (backend needs schema)
+#   rake qa:wait            # oracle + backend Ready
+#   rake qa:smoke           # health, auth, order flow, idempotency, isolation
 # =============================================================================
 
 require 'English'
@@ -577,8 +579,10 @@ namespace :qa do
     puts 'Workloads deleted (namespace and PVC left in place).'
   end
 
-  desc 'Full bring-up: cluster + image build/load + deploy + wait (DB init separate)'
-  task :up => ['qa:cluster:create', 'qa:image:build', 'qa:image:load', 'qa:deploy', 'qa:wait']
+  # NOTE: :wait is intentionally NOT part of :up - the backend only becomes
+  # Ready after qa:db:init has created the schema (DB health indicator).
+  desc 'Full bring-up: cluster + image build/load + deploy (then db:init, wait, smoke)'
+  task :up => ['qa:cluster:create', 'qa:image:build', 'qa:image:load', 'qa:deploy']
 
   desc 'Full teardown: workloads then cluster'
   task :teardown => ['qa:down', 'qa:cluster:delete']
