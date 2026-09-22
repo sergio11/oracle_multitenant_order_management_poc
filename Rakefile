@@ -40,7 +40,9 @@ INIT_SQL    = File.join(ROOT, 'infrastructure', 'podman', 'scripts', '01-init-db
 
 CLUSTER_NAME = ENV.fetch('QA_CLUSTER', 'poc-qa')
 NAMESPACE    = ENV.fetch('QA_NAMESPACE', 'poc-qa')
-IMAGE        = ENV.fetch('QA_IMAGE', 'enterprise-orders-qa:0.0.1')
+# NOTE: keep the localhost/ prefix - it is the exact name podman stores
+# and kind/containerd looks up (imagePullPolicy: Never needs exact match).
+IMAGE        = ENV.fetch('QA_IMAGE', 'localhost/enterprise-orders-qa:0.0.1')
 BACKEND_URL  = ENV.fetch('QA_BACKEND_URL', 'http://localhost:8080')
 ORACLE_HOST  = ENV.fetch('QA_ORACLE_HOST', 'localhost')
 ORACLE_PORT  = ENV.fetch('QA_ORACLE_PORT', '1521')
@@ -375,7 +377,16 @@ namespace :qa do
     task :load do
       ensure_cluster!
       ENV['KIND_EXPERIMENTAL_PROVIDER'] ||= 'podman'
-      run!('kind', 'load', 'docker-image', IMAGE, '--name', CLUSTER_NAME)
+      # NOTE: `kind load docker-image` cannot see Podman's image storage on
+      # this setup ("not present locally"), so go via a tarball archive.
+      require 'tmpdir'
+      archive = File.join(Dir.tmpdir, "qa-image-#{Process.pid}.tar")
+      begin
+        run!('podman', 'save', '-o', archive, IMAGE)
+        run!('kind', 'load', 'image-archive', archive, '--name', CLUSTER_NAME)
+      ensure
+        FileUtils.rm_f(archive)
+      end
     end
   end
 

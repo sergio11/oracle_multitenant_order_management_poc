@@ -18,8 +18,10 @@ spec:
     spec:
       containers:
         - name: backend
-          # Built by `rake qa:image:build` and loaded by `rake qa:image:load`
-          image: enterprise-orders-qa:0.0.1
+          # Built by `rake qa:image:build` and loaded by `rake qa:image:load`.
+          # Must match the exact repo name in the kind node
+          # (podman prefixes local builds with localhost/).
+          image: localhost/enterprise-orders-qa:0.0.1
           imagePullPolicy: Never
           ports:
             - name: http
