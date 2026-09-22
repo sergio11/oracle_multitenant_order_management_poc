@@ -2,14 +2,23 @@
 -- R__SEED_DATA - Repeatable seed for demo tenants (SRS 91)
 --
 -- Creates demo tenants ACME, GLOBEX, INITECH plus customers, products,
--- warehouses, inventory and a couple of orders for demo flow (SRS 121).
+-- warehouses, inventory and demo orders (SRS 121). Every product of
+-- each tenant gets stock (needed by demo + concurrency tests).
 --
 -- Idempotent: uses MERGE / NOT EXISTS so it can run repeatedly and on
 -- brand-new or partially-seeded environments.
+--
+-- VPD: since V011, tenant-aware tables carry DBMS_RLS policies with
+-- update_check=TRUE. The seed runs as APP_OWNER via Flyway WITHOUT a
+-- tenant context, which would fail with ORA-28104 on INSERT/UPDATE.
+-- Each tenant section therefore sets APP_CTX.TENANT_ID directly via
+-- DBMS_SESSION.SET_CONTEXT (pkg_tenant.set_tenant_context is NOT used:
+-- package bodies are only deployed later by deploy_packages.sql) and
+-- clears the context at the end of the section.
 --=====================================================================
 
 --=====================================================================
--- TENANTS
+-- TENANTS (no VPD policy on TENANT - safe without context)
 --=====================================================================
 MERGE INTO tenant t
 USING (SELECT 'ACME'    AS code, 'Acme Corporation'  AS name, 'STANDARD'  AS tier FROM dual
@@ -21,9 +30,17 @@ WHEN NOT MATCHED THEN
     VALUES (s.code, s.name, s.tier, 'ACTIVE', 'SHARED_SCHEMA');
 
 --=====================================================================
--- CUSTOMERS per tenant
+-- ACME data
 --=====================================================================
--- ACME customers
+DECLARE
+    v_tenant_id NUMBER;
+BEGIN
+    SELECT tenant_id INTO v_tenant_id FROM tenant WHERE tenant_code = 'ACME';
+    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', TO_CHAR(v_tenant_id));
+END;
+/
+
+-- Customers
 MERGE INTO customer c
 USING (SELECT t.tenant_id, 'C0001' AS num, 'Wile' AS fn, 'Coyote' AS ln, 'wile@acme.com' AS email
        FROM tenant t WHERE t.tenant_code = 'ACME') s
@@ -40,27 +57,7 @@ WHEN NOT MATCHED THEN
     INSERT (tenant_id, customer_number, first_name, last_name, email, status)
     VALUES (s.tenant_id, s.num, s.fn, s.ln, s.email, 'ACTIVE');
 
--- GLOBEX customers
-MERGE INTO customer c
-USING (SELECT t.tenant_id, 'C0001' AS num, 'Hank' AS fn, 'Scorpio' AS ln, 'hank@globex.com' AS email
-       FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
-ON (c.tenant_id = s.tenant_id AND c.customer_number = s.num)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, customer_number, first_name, last_name, email, status)
-    VALUES (s.tenant_id, s.num, s.fn, s.ln, s.email, 'ACTIVE');
-
--- INITECH customers
-MERGE INTO customer c
-USING (SELECT t.tenant_id, 'C0001' AS num, 'Milton' AS fn, 'Waddams' AS ln, 'milton@initech.com' AS email
-       FROM tenant t WHERE t.tenant_code = 'INITECH') s
-ON (c.tenant_id = s.tenant_id AND c.customer_number = s.num)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, customer_number, first_name, last_name, email, status)
-    VALUES (s.tenant_id, s.num, s.fn, s.ln, s.email, 'ACTIVE');
-
---=====================================================================
--- PRODUCT_CATEGORIES per tenant
---=====================================================================
+-- Product category
 MERGE INTO product_category pc
 USING (SELECT t.tenant_id, 'GENERAL' AS name FROM tenant t WHERE t.tenant_code = 'ACME') s
 ON (pc.tenant_id = s.tenant_id AND pc.name = s.name)
@@ -68,23 +65,7 @@ WHEN NOT MATCHED THEN
     INSERT (tenant_id, name, status)
     VALUES (s.tenant_id, s.name, 'ACTIVE');
 
-MERGE INTO product_category pc
-USING (SELECT t.tenant_id, 'GENERAL' AS name FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
-ON (pc.tenant_id = s.tenant_id AND pc.name = s.name)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, name, status)
-    VALUES (s.tenant_id, s.name, 'ACTIVE');
-
-MERGE INTO product_category pc
-USING (SELECT t.tenant_id, 'GENERAL' AS name FROM tenant t WHERE t.tenant_code = 'INITECH') s
-ON (pc.tenant_id = s.tenant_id AND pc.name = s.name)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, name, status)
-    VALUES (s.tenant_id, s.name, 'ACTIVE');
-
---=====================================================================
--- WAREHOUSES per tenant
---=====================================================================
+-- Warehouse
 MERGE INTO warehouse w
 USING (SELECT t.tenant_id, 'WH1' AS code, 'Main Warehouse' AS name
        FROM tenant t WHERE t.tenant_code = 'ACME') s
@@ -93,25 +74,7 @@ WHEN NOT MATCHED THEN
     INSERT (tenant_id, code, name, location, status)
     VALUES (s.tenant_id, s.code, s.name, 'Springfield', 'ACTIVE');
 
-MERGE INTO warehouse w
-USING (SELECT t.tenant_id, 'WH1' AS code, 'Main Warehouse' AS name
-       FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
-ON (w.tenant_id = s.tenant_id AND w.code = s.code)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, code, name, location, status)
-    VALUES (s.tenant_id, s.code, s.name, 'Cypress Creek', 'ACTIVE');
-
-MERGE INTO warehouse w
-USING (SELECT t.tenant_id, 'WH1' AS code, 'Main Warehouse' AS name
-       FROM tenant t WHERE t.tenant_code = 'INITECH') s
-ON (w.tenant_id = s.tenant_id AND w.code = s.code)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, code, name, location, status)
-    VALUES (s.tenant_id, s.code, s.name, 'New Orleans', 'ACTIVE');
-
---=====================================================================
--- PRODUCTS per tenant
---=====================================================================
+-- Products
 MERGE INTO product p
 USING (SELECT t.tenant_id, 'PRD-001' AS sku, 'Widget A' AS name, 25.00 AS price
        FROM tenant t WHERE t.tenant_code = 'ACME') s
@@ -128,41 +91,20 @@ WHEN NOT MATCHED THEN
     INSERT (tenant_id, sku, name, unit_price, currency, status)
     VALUES (s.tenant_id, s.sku, s.name, s.price, 'USD', 'ACTIVE');
 
-MERGE INTO product p
-USING (SELECT t.tenant_id, 'PRD-001' AS sku, 'Doomsday Device' AS name, 99.00 AS price
-       FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
-ON (p.tenant_id = s.tenant_id AND p.sku = s.sku)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, sku, name, unit_price, currency, status)
-    VALUES (s.tenant_id, s.sku, s.name, s.price, 'USD', 'ACTIVE');
-
-MERGE INTO product p
-USING (SELECT t.tenant_id, 'PRD-001' AS sku, 'PC Load Letter' AS name, 1200.00 AS price
-       FROM tenant t WHERE t.tenant_code = 'INITECH') s
-ON (p.tenant_id = s.tenant_id AND p.sku = s.sku)
-WHEN NOT MATCHED THEN
-    INSERT (tenant_id, sku, name, unit_price, currency, status)
-    VALUES (s.tenant_id, s.sku, s.name, s.price, 'USD', 'ACTIVE');
-
---=====================================================================
--- INVENTORY per tenant (enough stock for demo + concurrency tests)
---=====================================================================
+-- Inventory: EVERY product of the tenant (no SKU filter)
 MERGE INTO inventory i
 USING (
     SELECT p.tenant_id, w.warehouse_id, p.product_id, 100 AS qty
     FROM product p
     JOIN warehouse w ON w.tenant_id = p.tenant_id
-    WHERE p.sku = 'PRD-001'
+    WHERE p.tenant_id = (SELECT tenant_id FROM tenant WHERE tenant_code = 'ACME')
 ) s
 ON (i.tenant_id = s.tenant_id AND i.warehouse_id = s.warehouse_id AND i.product_id = s.product_id)
 WHEN NOT MATCHED THEN
     INSERT (tenant_id, warehouse_id, product_id, available_quantity, reserved_quantity)
     VALUES (s.tenant_id, s.warehouse_id, s.product_id, s.qty, 0);
 
---=====================================================================
--- Demo orders (ACME as demo flow, SRS 121)
---=====================================================================
--- Create one PENDING order for ACME so the demo can confirm it.
+-- Demo order 1 (ACME, single line) so the demo can confirm it.
 MERGE INTO sales_order o
 USING (
     SELECT c.tenant_id, 'SO-ACME-0001' AS num, c.customer_id
@@ -175,7 +117,6 @@ WHEN NOT MATCHED THEN
     INSERT (tenant_id, order_number, customer_id, status, currency, total_amount)
     VALUES (s.tenant_id, s.num, s.customer_id, 'PENDING', 'USD', 50.00);
 
--- Add a line to the demo order and keep total consistent.
 MERGE INTO sales_order_line l
 USING (
     SELECT o.tenant_id, o.order_id, p.product_id
@@ -189,6 +130,184 @@ WHEN NOT MATCHED THEN
     INSERT (tenant_id, order_id, product_id, quantity, unit_price, line_total)
     VALUES (s.tenant_id, s.order_id, s.product_id, 2, 25.00, 50.00);
 
+-- Demo order 2 (ACME, MULTI-LINE: two lines) - exercises multi-line orders.
+MERGE INTO sales_order o
+USING (
+    SELECT c.tenant_id, 'SO-ACME-0002' AS num, c.customer_id
+    FROM customer c
+    JOIN tenant t ON t.tenant_id = c.tenant_id
+    WHERE t.tenant_code = 'ACME' AND c.customer_number = 'C0002'
+) s
+ON (o.tenant_id = s.tenant_id AND o.order_number = s.num)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, order_number, customer_id, status, currency, total_amount)
+    VALUES (s.tenant_id, s.num, s.customer_id, 'PENDING', 'USD', 74.99);
+
+MERGE INTO sales_order_line l
+USING (
+    SELECT o.tenant_id, o.order_id, p.product_id, p.unit_price, p.sku
+    FROM sales_order o
+    JOIN tenant t ON t.tenant_id = o.tenant_id
+    JOIN product p ON p.tenant_id = o.tenant_id
+    WHERE t.tenant_code = 'ACME' AND o.order_number = 'SO-ACME-0002'
+      AND p.sku IN ('PRD-001','PRD-002')
+) s
+ON (l.tenant_id = s.tenant_id AND l.order_id = s.order_id AND l.product_id = s.product_id)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, order_id, product_id, quantity, unit_price, line_total)
+    VALUES (s.tenant_id, s.order_id, s.product_id, 1, s.unit_price, s.unit_price);
+
+BEGIN
+    DBMS_SESSION.CLEAR_ALL_CONTEXT('APP_CTX');
+END;
+/
+
 --=====================================================================
--- End of seed data
+-- GLOBEX data
+--=====================================================================
+DECLARE
+    v_tenant_id NUMBER;
+BEGIN
+    SELECT tenant_id INTO v_tenant_id FROM tenant WHERE tenant_code = 'GLOBEX';
+    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', TO_CHAR(v_tenant_id));
+END;
+/
+
+MERGE INTO customer c
+USING (SELECT t.tenant_id, 'C0001' AS num, 'Hank' AS fn, 'Scorpio' AS ln, 'hank@globex.com' AS email
+       FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
+ON (c.tenant_id = s.tenant_id AND c.customer_number = s.num)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, customer_number, first_name, last_name, email, status)
+    VALUES (s.tenant_id, s.num, s.fn, s.ln, s.email, 'ACTIVE');
+
+MERGE INTO product_category pc
+USING (SELECT t.tenant_id, 'GENERAL' AS name FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
+ON (pc.tenant_id = s.tenant_id AND pc.name = s.name)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, name, status)
+    VALUES (s.tenant_id, s.name, 'ACTIVE');
+
+MERGE INTO warehouse w
+USING (SELECT t.tenant_id, 'WH1' AS code, 'Main Warehouse' AS name
+       FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
+ON (w.tenant_id = s.tenant_id AND w.code = s.code)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, code, name, location, status)
+    VALUES (s.tenant_id, s.code, s.name, 'Cypress Creek', 'ACTIVE');
+
+MERGE INTO product p
+USING (SELECT t.tenant_id, 'PRD-001' AS sku, 'Doomsday Device' AS name, 99.00 AS price
+       FROM tenant t WHERE t.tenant_code = 'GLOBEX') s
+ON (p.tenant_id = s.tenant_id AND p.sku = s.sku)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, sku, name, unit_price, currency, status)
+    VALUES (s.tenant_id, s.sku, s.name, s.price, 'USD', 'ACTIVE');
+
+-- Inventory: EVERY product of the tenant
+MERGE INTO inventory i
+USING (
+    SELECT p.tenant_id, w.warehouse_id, p.product_id, 100 AS qty
+    FROM product p
+    JOIN warehouse w ON w.tenant_id = p.tenant_id
+    WHERE p.tenant_id = (SELECT tenant_id FROM tenant WHERE tenant_code = 'GLOBEX')
+) s
+ON (i.tenant_id = s.tenant_id AND i.warehouse_id = s.warehouse_id AND i.product_id = s.product_id)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, warehouse_id, product_id, available_quantity, reserved_quantity)
+    VALUES (s.tenant_id, s.warehouse_id, s.product_id, s.qty, 0);
+
+-- Demo order for GLOBEX
+MERGE INTO sales_order o
+USING (
+    SELECT c.tenant_id, 'SO-GLOBEX-0001' AS num, c.customer_id
+    FROM customer c
+    JOIN tenant t ON t.tenant_id = c.tenant_id
+    WHERE t.tenant_code = 'GLOBEX' AND c.customer_number = 'C0001'
+) s
+ON (o.tenant_id = s.tenant_id AND o.order_number = s.num)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, order_number, customer_id, status, currency, total_amount)
+    VALUES (s.tenant_id, s.num, s.customer_id, 'PENDING', 'USD', 99.00);
+
+MERGE INTO sales_order_line l
+USING (
+    SELECT o.tenant_id, o.order_id, p.product_id
+    FROM sales_order o
+    JOIN tenant t ON t.tenant_id = o.tenant_id
+    JOIN product p ON p.tenant_id = o.tenant_id
+    WHERE t.tenant_code = 'GLOBEX' AND o.order_number = 'SO-GLOBEX-0001' AND p.sku = 'PRD-001'
+) s
+ON (l.tenant_id = s.tenant_id AND l.order_id = s.order_id AND l.product_id = s.product_id)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, order_id, product_id, quantity, unit_price, line_total)
+    VALUES (s.tenant_id, s.order_id, s.product_id, 1, 99.00, 99.00);
+
+BEGIN
+    DBMS_SESSION.CLEAR_ALL_CONTEXT('APP_CTX');
+END;
+/
+
+--=====================================================================
+-- INITECH data
+--=====================================================================
+DECLARE
+    v_tenant_id NUMBER;
+BEGIN
+    SELECT tenant_id INTO v_tenant_id FROM tenant WHERE tenant_code = 'INITECH';
+    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', TO_CHAR(v_tenant_id));
+END;
+/
+
+MERGE INTO customer c
+USING (SELECT t.tenant_id, 'C0001' AS num, 'Milton' AS fn, 'Waddams' AS ln, 'milton@initech.com' AS email
+       FROM tenant t WHERE t.tenant_code = 'INITECH') s
+ON (c.tenant_id = s.tenant_id AND c.customer_number = s.num)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, customer_number, first_name, last_name, email, status)
+    VALUES (s.tenant_id, s.num, s.fn, s.ln, s.email, 'ACTIVE');
+
+MERGE INTO product_category pc
+USING (SELECT t.tenant_id, 'GENERAL' AS name FROM tenant t WHERE t.tenant_code = 'INITECH') s
+ON (pc.tenant_id = s.tenant_id AND pc.name = s.name)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, name, status)
+    VALUES (s.tenant_id, s.name, 'ACTIVE');
+
+MERGE INTO warehouse w
+USING (SELECT t.tenant_id, 'WH1' AS code, 'Main Warehouse' AS name
+       FROM tenant t WHERE t.tenant_code = 'INITECH') s
+ON (w.tenant_id = s.tenant_id AND w.code = s.code)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, code, name, location, status)
+    VALUES (s.tenant_id, s.code, s.name, 'New Orleans', 'ACTIVE');
+
+MERGE INTO product p
+USING (SELECT t.tenant_id, 'PRD-001' AS sku, 'PC Load Letter' AS name, 1200.00 AS price
+       FROM tenant t WHERE t.tenant_code = 'INITECH') s
+ON (p.tenant_id = s.tenant_id AND p.sku = s.sku)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, sku, name, unit_price, currency, status)
+    VALUES (s.tenant_id, s.sku, s.name, s.price, 'USD', 'ACTIVE');
+
+-- Inventory: EVERY product of the tenant
+MERGE INTO inventory i
+USING (
+    SELECT p.tenant_id, w.warehouse_id, p.product_id, 100 AS qty
+    FROM product p
+    JOIN warehouse w ON w.tenant_id = p.tenant_id
+    WHERE p.tenant_id = (SELECT tenant_id FROM tenant WHERE tenant_code = 'INITECH')
+) s
+ON (i.tenant_id = s.tenant_id AND i.warehouse_id = s.warehouse_id AND i.product_id = s.product_id)
+WHEN NOT MATCHED THEN
+    INSERT (tenant_id, warehouse_id, product_id, available_quantity, reserved_quantity)
+    VALUES (s.tenant_id, s.warehouse_id, s.product_id, s.qty, 0);
+
+BEGIN
+    DBMS_SESSION.CLEAR_ALL_CONTEXT('APP_CTX');
+END;
+/
+
+--=====================================================================
+-- End of seed data (context cleared after every tenant section)
 --=====================================================================

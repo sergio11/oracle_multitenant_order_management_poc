@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.order.infrastructure;
 
+import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.order.dto.OrderResponse;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
@@ -122,5 +123,62 @@ class IdempotentOperationExecutorTest {
 
         assertEquals(ORDER_ID, result.orderId());
         verify(action, never()).get();
+    }
+
+    @Test
+    void shouldRejectWhenKeyExistsWithDifferentOperation() {
+        var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "PAYMENT", "COMPLETED");
+        when(idempotencyStore.findByKey(TENANT_ID, "key-op-conflict")).thenReturn(Optional.of(record));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> executor.execute(TENANT_ID, "key-op-conflict", "CONFIRM_ORDER", ORDER_ID, () -> mockResponse));
+
+        assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
+        assertEquals(409, ex.getHttpStatus());
+        verify(orderRepository, never()).findById(anyLong(), anyLong());
+    }
+
+    @Test
+    void shouldRejectWhenKeyExistsWithDifferentAggregateId() {
+        var record = new IdempotencyStore.IdempotencyRecord(999L, "CONFIRM_ORDER", "COMPLETED");
+        when(idempotencyStore.findByKey(TENANT_ID, "key-agg-conflict")).thenReturn(Optional.of(record));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> executor.execute(TENANT_ID, "key-agg-conflict", "CONFIRM_ORDER", ORDER_ID, () -> mockResponse));
+
+        assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
+        assertEquals(409, ex.getHttpStatus());
+        verify(orderRepository, never()).findById(anyLong(), anyLong());
+    }
+
+    @Test
+    void shouldReturnFindByIdOfRecordedAggregateWhenKeyMatches() {
+        var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "COMPLETED");
+        when(idempotencyStore.findByKey(TENANT_ID, "key-match")).thenReturn(Optional.of(record));
+        when(orderRepository.findById(TENANT_ID, ORDER_ID)).thenReturn(mockResponse);
+
+        Supplier<OrderResponse> action = mock(Supplier.class);
+        OrderResponse result = executor.execute(TENANT_ID, "key-match", "CONFIRM_ORDER", ORDER_ID, action);
+
+        assertNotNull(result);
+        assertEquals(ORDER_ID, result.orderId());
+        verify(orderRepository).findById(TENANT_ID, ORDER_ID);
+        verify(action, never()).get();
+    }
+
+    @Test
+    void shouldRejectRaceResultWhenOperationDiffers() {
+        var raceRecord = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "PAYMENT", "COMPLETED");
+        when(idempotencyStore.findByKey(TENANT_ID, "key-race-conflict"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(raceRecord));
+        when(idempotencyStore.insertPending(TENANT_ID, "key-race-conflict", "CONFIRM_ORDER", ORDER_ID)).thenReturn(false);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> executor.execute(TENANT_ID, "key-race-conflict", "CONFIRM_ORDER", ORDER_ID, () -> mockResponse));
+
+        assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
+        assertEquals(409, ex.getHttpStatus());
+        verify(orderRepository, never()).findById(anyLong(), anyLong());
     }
 }

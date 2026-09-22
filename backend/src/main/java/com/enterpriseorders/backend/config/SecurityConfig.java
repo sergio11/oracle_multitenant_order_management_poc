@@ -26,8 +26,8 @@ public class SecurityConfig {
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints
-                .requestMatchers("/actuator/health").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/tenants").permitAll()
+                .requestMatchers("/actuator/health", "/internal/health").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/v1/tenants").hasRole("ADMIN")
                 // Order operations require ORDER_OPERATOR role
                 .requestMatchers("/api/v1/orders/**").hasRole("ORDER_OPERATOR")
                 // Reporting refresh requires ADMIN role

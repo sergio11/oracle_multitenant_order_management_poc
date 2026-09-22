@@ -15,8 +15,7 @@ BEGIN
         function_schema => 'APP_OWNER',
         policy_function => 'PKG_VPD.TENANT_PREDICATE',
         statement_types => 'SELECT',
-        update_check    => FALSE,
-        sec_relevant_cols => 'TENANT_ID'
+        update_check    => FALSE
     );
 END;
 /
@@ -36,8 +35,7 @@ BEGIN
         function_schema => 'APP_OWNER',
         policy_function => 'PKG_VPD.TENANT_PREDICATE',
         statement_types => 'SELECT',
-        update_check    => FALSE,
-        sec_relevant_cols => 'TENANT_ID'
+        update_check    => FALSE
     );
 END;
 /

@@ -21,13 +21,13 @@ class RefreshRateLimiterTest {
     @Test
     void shouldReturnNonZeroRemainingWithinCooldown() {
         limiter.tryAcquire();
-        long remaining = limiter.getRemainingCooldownMs();
+        long remaining = limiter.getRemainingCooldownSeconds();
         assertTrue(remaining > 0);
     }
 
     @Test
     void shouldReturnZeroRemainingWhenCooldownExpired() {
         // The initial state has lastRefreshTime = 0, so it should be 0
-        assertEquals(0, limiter.getRemainingCooldownMs());
+        assertEquals(0, limiter.getRemainingCooldownSeconds());
     }
 }

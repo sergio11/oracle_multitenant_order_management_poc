@@ -177,14 +177,16 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         v_line_total NUMBER(18,2);
         v_order_status VARCHAR2(20);
     BEGIN
-        -- Only DRAFT orders accept new lines
+        -- DRAFT and PENDING orders accept new lines (first line promotes
+        -- DRAFT -> PENDING, subsequent lines may still be added before
+        -- confirmation).
         SELECT status INTO v_order_status
           FROM sales_order
          WHERE order_id = p_order_id AND tenant_id = p_tenant_id
            FOR UPDATE;
 
-        IF v_order_status <> 'DRAFT' THEN
-            RAISE_APPLICATION_ERROR(-20023, 'Cannot add lines to a non-DRAFT order.');
+        IF v_order_status NOT IN ('DRAFT','PENDING') THEN
+            RAISE_APPLICATION_ERROR(-20023, 'Cannot add lines to a non-DRAFT/PENDING order.');
         END IF;
 
         assert_product_tenant(p_tenant_id, p_product_id);
@@ -330,13 +332,30 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
          WHERE order_id = p_order_id AND tenant_id = p_tenant_id
            FOR UPDATE;
 
-        -- BR-008: completed cannot be cancelled directly
+        -- BR-008 / state machine: SHIPPED (goods left the warehouse) and
+        -- terminal states cannot be cancelled.
+        IF v_status = 'SHIPPED' THEN
+            RAISE_APPLICATION_ERROR(-20034, 'Cannot cancel a shipped order');
+        END IF;
+
         IF v_status IN ('COMPLETED','CANCELLED') THEN
             RAISE_APPLICATION_ERROR(-20027, 'Order ' || v_status || ' cannot be cancelled.');
         END IF;
 
-        -- If previously confirmed/allocated, release inventory
-        IF v_status IN ('CONFIRMED','ALLOCATED','PAID','SHIPPED') THEN
+        -- Cancelling a PAID order refunds its captured payments so the
+        -- order and payment states stay consistent.
+        IF v_status = 'PAID' THEN
+            UPDATE payment
+               SET status     = 'REFUNDED',
+                   updated_at = SYSTIMESTAMP
+             WHERE tenant_id = p_tenant_id
+               AND order_id  = p_order_id
+               AND status    = 'CAPTURED';
+        END IF;
+
+        -- If previously confirmed/allocated, release inventory.
+        -- (SHIPPED is unreachable here - rejected above.)
+        IF v_status IN ('CONFIRMED','ALLOCATED','PAID') THEN
             SELECT warehouse_id INTO v_warehouse_id
               FROM (
                 SELECT warehouse_id
@@ -393,9 +412,20 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         p_actor           IN VARCHAR2 DEFAULT 'APP_JAVA',
         p_correlation_id  IN VARCHAR2 DEFAULT NULL
     ) IS
-        v_status VARCHAR2(20);
+        v_status            VARCHAR2(20);
+        v_order_currency    VARCHAR2(3);
+        v_new_payment       BOOLEAN := FALSE;
+        v_existing_amount   NUMBER(18,2);
+        v_existing_currency VARCHAR2(3);
+        v_existing_order    NUMBER;
     BEGIN
-        SELECT status INTO v_status
+        -- BR: payment amount must be positive
+        IF p_amount IS NULL OR p_amount <= 0 THEN
+            RAISE_APPLICATION_ERROR(-20032, 'Payment amount must be positive');
+        END IF;
+
+        -- Lock the order row (also used for the currency check below)
+        SELECT status, currency INTO v_status, v_order_currency
           FROM sales_order
          WHERE order_id = p_order_id AND tenant_id = p_tenant_id
            FOR UPDATE;
@@ -405,7 +435,13 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             RAISE_APPLICATION_ERROR(-20028, 'Payment requires order CONFIRMED or later, current=' || v_status);
         END IF;
 
-        -- Insert payment (idempotent by unique payment_reference) (FR-014)
+        -- BR: payment currency must match the order currency
+        IF p_currency <> v_order_currency THEN
+            RAISE_APPLICATION_ERROR(-20033, 'Payment currency ' || p_currency ||
+                ' does not match order currency ' || v_order_currency);
+        END IF;
+
+        -- Insert payment (unique on (tenant_id, payment_reference)) (FR-014)
         BEGIN
             INSERT INTO payment (
                 tenant_id, order_id, payment_reference, amount, currency,
@@ -414,12 +450,46 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
                 p_tenant_id, p_order_id, p_payment_ref, p_amount, p_currency,
                 'CAPTURED', p_payment_method
             );
+            v_new_payment := TRUE;
         EXCEPTION
             WHEN DUP_VAL_ON_INDEX THEN
-                RAISE_APPLICATION_ERROR(-20029, 'Duplicate payment reference: ' || p_payment_ref);
+                -- Same payment_reference already exists: idempotent retry
+                -- iff the stored row matches this request; otherwise it is
+                -- a conflicting duplicate.
+                BEGIN
+                    SELECT amount, currency, order_id
+                      INTO v_existing_amount, v_existing_currency, v_existing_order
+                      FROM payment
+                     WHERE tenant_id = p_tenant_id
+                       AND payment_reference = p_payment_ref;
+                EXCEPTION
+                    WHEN NO_DATA_FOUND THEN
+                        RAISE_APPLICATION_ERROR(-20029, 'Duplicate payment reference: ' || p_payment_ref);
+                END;
+
+                IF v_existing_order <> p_order_id
+                   OR v_existing_amount <> p_amount
+                   OR v_existing_currency <> p_currency THEN
+                    RAISE_APPLICATION_ERROR(-20029,
+                        'Duplicate payment reference with different data: ' || p_payment_ref);
+                END IF;
+
+                -- Identical retry: skip the insert. If the order already
+                -- reached PAID this is a no-op success; otherwise fall
+                -- through so the PAID transition still happens (the first
+                -- attempt may have failed after inserting the payment).
+                IF v_status = 'PAID' THEN
+                    RETURN;
+                END IF;
         END;
 
-        -- Transition to PAID
+        -- A NEW payment on an already-PAID order is a genuine double pay
+        -- (the idempotent path above returns early).
+        IF v_new_payment AND v_status = 'PAID' THEN
+            RAISE_APPLICATION_ERROR(-20031, 'Order already paid; duplicate payment rejected');
+        END IF;
+
+        -- Transition to PAID (new payment or idempotent retry not yet applied)
         transition_status(
             p_tenant_id   => p_tenant_id,
             p_order_id    => p_order_id,

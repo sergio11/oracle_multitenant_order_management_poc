@@ -16,7 +16,7 @@ public class RefreshRateLimiter {
         return (now - lastRefresh) >= COOLDOWN_MS;
     }
 
-    public long getRemainingCooldownMs() {
+    public long getRemainingCooldownSeconds() {
         long now = System.currentTimeMillis();
         long lastRefresh = lastRefreshTime.get();
         long elapsed = now - lastRefresh;

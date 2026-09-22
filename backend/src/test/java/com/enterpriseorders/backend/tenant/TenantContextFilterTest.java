@@ -14,6 +14,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -31,9 +33,7 @@ class TenantContextFilterTest {
     @Test
     void shouldSetTenantContextWhenValidHeader() throws ServletException, IOException {
         when(request.getHeader("X-Tenant-ID")).thenReturn("ACME");
-        when(request.getRequestURI()).thenReturn("/api/v1/orders");
         when(tenantRepository.findActiveTenantIdByCode("ACME")).thenReturn(Optional.of(1L));
-        when(objectMapper.writeValueAsString(any())).thenReturn("{}");
         filter.doFilterInternal(request, response, filterChain);
         verify(tenantContext).setTenantId(1L);
         verify(filterChain).doFilter(request, response);
@@ -43,7 +43,7 @@ class TenantContextFilterTest {
     @Test
     void shouldReturn401WhenMissingHeader() throws ServletException, IOException {
         when(request.getHeader("X-Tenant-ID")).thenReturn(null);
-        when(request.getRequestURI()).thenReturn("/api/v1/orders");
+        when(response.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
         when(objectMapper.writeValueAsString(any())).thenReturn("{}");
         filter.doFilterInternal(request, response, filterChain);
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
@@ -53,7 +53,7 @@ class TenantContextFilterTest {
     @Test
     void shouldReturn401WhenInvalidTenantCode() throws ServletException, IOException {
         when(request.getHeader("X-Tenant-ID")).thenReturn("UNKNOWN");
-        when(request.getRequestURI()).thenReturn("/api/v1/orders");
+        when(response.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
         when(tenantRepository.findActiveTenantIdByCode("UNKNOWN")).thenReturn(Optional.empty());
         when(objectMapper.writeValueAsString(any())).thenReturn("{}");
         filter.doFilterInternal(request, response, filterChain);
@@ -64,11 +64,11 @@ class TenantContextFilterTest {
     @Test
     void shouldReturn503WhenDbException() throws ServletException, IOException {
         when(request.getHeader("X-Tenant-ID")).thenReturn("ACME");
-        when(request.getRequestURI()).thenReturn("/api/v1/orders");
+        when(response.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
         when(tenantRepository.findActiveTenantIdByCode("ACME")).thenThrow(new RuntimeException("DB down"));
         when(objectMapper.writeValueAsString(any())).thenReturn("{}");
         filter.doFilterInternal(request, response, filterChain);
-        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         verify(filterChain, never()).doFilter(any(), any());
     }
 
@@ -81,6 +81,12 @@ class TenantContextFilterTest {
     @Test
     void shouldSkipFilterForActuator() {
         when(request.getRequestURI()).thenReturn("/actuator/health");
+        assertTrue(filter.shouldNotFilter(request));
+    }
+
+    @Test
+    void shouldSkipFilterForInternalEndpoints() {
+        when(request.getRequestURI()).thenReturn("/internal/health");
         assertTrue(filter.shouldNotFilter(request));
     }
 

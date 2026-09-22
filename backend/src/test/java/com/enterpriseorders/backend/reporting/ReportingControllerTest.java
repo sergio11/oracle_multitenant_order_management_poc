@@ -5,8 +5,11 @@ import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
 import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedViewsUseCase;
 import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
 import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
+import com.enterpriseorders.backend.tenant.TenantContext;
+import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -24,6 +27,8 @@ class ReportingControllerTest {
     @MockBean private GetDailyOrdersQuery getDailyOrdersQuery;
     @MockBean private GetTopProductsQuery getTopProductsQuery;
     @MockBean private RefreshMaterializedViewsUseCase refreshMaterializedViewsUseCase;
+    @MockBean private TenantRepository tenantRepository;
+    @MockBean private TenantContext tenantContext;
 
     @Test
     void shouldGetDailyOrders() throws Exception {

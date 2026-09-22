@@ -9,6 +9,15 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Order aggregate (Java-layer model).
+ *
+ * <p>The authoritative lifecycle/state machine lives in PL/SQL
+ * ({@code pkg_order_management}); mutations are atomic in the database.
+ * This aggregate models the same rules for the Java layer and documents
+ * the state machine, but it is not instantiated in the current request
+ * flow because mutations are atomic in the database.</p>
+ */
 public class Order {
 
     private final Long orderId;

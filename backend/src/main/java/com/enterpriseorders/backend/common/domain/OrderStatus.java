@@ -1,5 +1,13 @@
 package com.enterpriseorders.backend.common.domain;
 
+/**
+ * Order lifecycle states.
+ *
+ * <p>The authoritative state machine lives in PL/SQL
+ * ({@code pkg_order_management}); this enum mirrors the same rules for
+ * the Java layer and documents the state machine. Transitions are
+ * applied atomically in the database — this enum is not the authority.</p>
+ */
 public enum OrderStatus {
     DRAFT,
     PENDING,
@@ -10,6 +18,11 @@ public enum OrderStatus {
     COMPLETED,
     CANCELLED;
 
+    /**
+     * Mirrors the PL/SQL transition matrix from {@code pkg_order_management}.
+     * The authoritative state machine lives in PL/SQL; this method documents
+     * the same rules for the Java layer.
+     */
     public boolean canTransitionTo(OrderStatus next) {
         return switch (this) {
             case DRAFT -> next == PENDING;

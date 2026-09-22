@@ -46,6 +46,9 @@ public class OracleUcpConfig {
     @Value("${oracle.ucp.inactive-connection-timeout:300}")
     private int inactiveConnectionTimeout;
 
+    @Value("${oracle.ucp.abandoned-connection-timeout:60}")
+    private int abandonedConnectionTimeout;
+
     @Value("${oracle.ucp.validate-connection-on-borrow:true}")
     private boolean validateOnBorrow;
 
@@ -67,6 +70,7 @@ public class OracleUcpConfig {
         // Timeouts: avoid application hang on pool exhaustion (FT-002)
         pds.setConnectionWaitTimeout(connectionWaitTimeout);
         pds.setInactiveConnectionTimeout(inactiveConnectionTimeout);
+        pds.setAbandonedConnectionTimeout(abandonedConnectionTimeout);
 
         // Health checks: validate connections before borrow (FT-001)
         pds.setValidateConnectionOnBorrow(validateOnBorrow);

@@ -28,7 +28,6 @@ class ReportingDaoTest {
         when(jdbcTemplate.query(anyString(), any(RowMapper.class))).thenAnswer(inv -> {
             RowMapper<OrderDailySummary> mapper = inv.getArgument(1);
             var rs = mock(java.sql.ResultSet.class);
-            when(rs.next()).thenReturn(true, false);
             when(rs.getLong("tenant_id")).thenReturn(1L);
             when(rs.getDate("order_date")).thenReturn(java.sql.Date.valueOf(LocalDate.now()));
             when(rs.getLong("order_count")).thenReturn(10L);
@@ -47,7 +46,6 @@ class ReportingDaoTest {
         when(jdbcTemplate.query(anyString(), any(RowMapper.class), eq(10))).thenAnswer(inv -> {
             RowMapper<ProductSalesSummary> mapper = inv.getArgument(1);
             var rs = mock(java.sql.ResultSet.class);
-            when(rs.next()).thenReturn(true, false);
             when(rs.getLong("tenant_id")).thenReturn(1L);
             when(rs.getLong("product_id")).thenReturn(1L);
             when(rs.getDate("period")).thenReturn(java.sql.Date.valueOf(LocalDate.now()));

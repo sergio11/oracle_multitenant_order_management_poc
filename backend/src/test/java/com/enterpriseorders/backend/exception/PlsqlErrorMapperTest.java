@@ -85,4 +85,40 @@ class PlsqlErrorMapperTest {
         RuntimeException result = PlsqlErrorMapper.map(ex);
         assertInstanceOf(DatabaseException.class, result);
     }
+
+    @Test
+    void shouldMapOra20031ToOrderAlreadyPaid() {
+        SQLException ex = new SQLException("ORA-20031: Order already paid", "ORA-20031");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("ORDER_ALREADY_PAID", ((BusinessException) result).getCode());
+        assertEquals(409, ((BusinessException) result).getHttpStatus());
+    }
+
+    @Test
+    void shouldMapOra20032ToPaymentAmountInvalid() {
+        SQLException ex = new SQLException("ORA-20032: Payment amount must be positive", "ORA-20032");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("PAYMENT_AMOUNT_INVALID", ((BusinessException) result).getCode());
+        assertEquals(400, ((BusinessException) result).getHttpStatus());
+    }
+
+    @Test
+    void shouldMapOra20033ToPaymentCurrencyMismatch() {
+        SQLException ex = new SQLException("ORA-20033: Payment currency mismatch", "ORA-20033");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("PAYMENT_CURRENCY_MISMATCH", ((BusinessException) result).getCode());
+        assertEquals(400, ((BusinessException) result).getHttpStatus());
+    }
+
+    @Test
+    void shouldMapOra20034ToShippedNotCancellable() {
+        SQLException ex = new SQLException("ORA-20034: Cannot cancel a shipped order", "ORA-20034");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("ORDER_SHIPPED_NOT_CANCELLABLE", ((BusinessException) result).getCode());
+        assertEquals(409, ((BusinessException) result).getHttpStatus());
+    }
 }

@@ -52,7 +52,7 @@ class ReportingServiceTest {
     @Test
     void shouldThrowWhenRateLimitExceeded() {
         when(rateLimiter.tryAcquire()).thenReturn(false);
-        when(rateLimiter.getRemainingCooldownMs()).thenReturn(45L);
+        when(rateLimiter.getRemainingCooldownSeconds()).thenReturn(45L);
         assertThrows(RefreshRateLimitException.class, () -> reportingService.refreshMaterializedViews());
         verify(refreshPort, never()).refreshMaterializedViews();
     }

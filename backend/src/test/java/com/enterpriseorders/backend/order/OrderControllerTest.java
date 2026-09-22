@@ -2,9 +2,12 @@ package com.enterpriseorders.backend.order;
 
 import com.enterpriseorders.backend.order.dto.OrderResponse;
 import com.enterpriseorders.backend.order.port.input.*;
+import com.enterpriseorders.backend.tenant.TenantContext;
+import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
@@ -26,6 +29,8 @@ class OrderControllerTest {
     @MockBean private CancelOrderUseCase cancelOrderUseCase;
     @MockBean private RegisterPaymentUseCase registerPaymentUseCase;
     @MockBean private GetOrderQuery getOrderQuery;
+    @MockBean private TenantRepository tenantRepository;
+    @MockBean private TenantContext tenantContext;
 
     private static final String BASE = "/api/v1/orders";
     private final OrderResponse mockOrder = new OrderResponse(1L, "ORD-001", 1L, 100L, "DRAFT", "USD", BigDecimal.ZERO, 0);

@@ -1,5 +1,9 @@
 # GoldenGate Replication
 
+> **Note:** The GoldenGate configuration in this directory is **illustrative
+> only and is NOT deployed in the local lab** (no GoldenGate installation);
+> see the header comments in the setup scripts.
+
 Replication layer for the Enterprise Order Platform DR/Reporting architecture
 (SRS §2, §96). The source is the OLTP PDB (`PDB_OLTP`) on the primary site;
 the target is the Reporting/DR PDB on the standby.

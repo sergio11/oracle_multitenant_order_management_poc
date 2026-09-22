@@ -41,7 +41,7 @@ public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuer
         if (!rateLimiter.tryAcquire()) {
             throw new RefreshRateLimitException(
                     "Materialized view refresh rate limit exceeded. Wait " +
-                    rateLimiter.getRemainingCooldownMs() + " seconds.");
+                    rateLimiter.getRemainingCooldownSeconds() + " seconds.");
         }
         refreshPort.refreshMaterializedViews();
     }

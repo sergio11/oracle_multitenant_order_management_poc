@@ -56,9 +56,9 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
         Long tenantId = currentTenantId();
         OrderResponse current = orderRepository.findById(tenantId, orderId);
         OrderStatus status = OrderStatus.fromString(current.status());
-        if (status != OrderStatus.DRAFT) {
+        if (status != OrderStatus.DRAFT && status != OrderStatus.PENDING) {
             throw new BusinessException("ORDER_NOT_DRAFT",
-                    "Cannot add lines to a non-DRAFT order", 400);
+                    "Cannot add lines to a non-DRAFT/PENDING order", 400);
         }
         orderRepository.addLine(tenantId, orderId, productId, quantity, warehouseId);
         return orderRepository.findById(tenantId, orderId);
@@ -67,15 +67,15 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     @Transactional
     public OrderResponse confirmOrder(Long orderId, String idempotencyKey) {
         Long tenantId = currentTenantId();
-        OrderResponse current = orderRepository.findById(tenantId, orderId);
-        OrderStatus status = OrderStatus.fromString(current.status());
-        if (status != OrderStatus.PENDING) {
-            throw new BusinessException("ORDER_NOT_CONFIRMABLE",
-                    "Order cannot be confirmed from current status", 400);
-        }
         String payload = serializeIdempotentPayload(java.util.Map.of("orderId", orderId));
         return idempotentExecutor.execute(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId,
             () -> {
+                OrderResponse current = orderRepository.findById(tenantId, orderId);
+                OrderStatus status = OrderStatus.fromString(current.status());
+                if (status != OrderStatus.PENDING) {
+                    throw new BusinessException("ORDER_NOT_CONFIRMABLE",
+                            "Order cannot be confirmed from current status", 400);
+                }
                 orderRepository.confirm(tenantId, orderId, ACTOR, MDC.get("correlationId"));
                 OrderResponse response = orderRepository.findById(tenantId, orderId);
                 markIdempotentCompleted(tenantId, idempotencyKey, payload);
@@ -101,15 +101,15 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                                          BigDecimal amount, String currency,
                                          String paymentMethod, String idempotencyKey) {
         Long tenantId = currentTenantId();
-        OrderResponse current = orderRepository.findById(tenantId, orderId);
-        OrderStatus status = OrderStatus.fromString(current.status());
-        if (status != OrderStatus.CONFIRMED && status != OrderStatus.ALLOCATED && status != OrderStatus.PAID) {
-            throw new BusinessException("PAYMENT_STATE_INVALID",
-                    "Payment requires order CONFIRMED or later", 400);
-        }
         String payload = serializeIdempotentPayload(java.util.Map.of("orderId", orderId, "paymentRef", paymentRef));
         return idempotentExecutor.execute(tenantId, idempotencyKey, "PAYMENT", orderId,
             () -> {
+                OrderResponse current = orderRepository.findById(tenantId, orderId);
+                OrderStatus status = OrderStatus.fromString(current.status());
+                if (status != OrderStatus.CONFIRMED && status != OrderStatus.ALLOCATED && status != OrderStatus.PAID) {
+                    throw new BusinessException("PAYMENT_STATE_INVALID",
+                            "Payment requires order CONFIRMED or later", 400);
+                }
                 orderRepository.registerPayment(tenantId, orderId, paymentRef, amount, currency,
                     paymentMethod, ACTOR, MDC.get("correlationId"));
                 OrderResponse response = orderRepository.findById(tenantId, orderId);
@@ -134,11 +134,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
 
     private void markIdempotentCompleted(Long tenantId, String idempotencyKey, String payload) {
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            try {
-                idempotencyStore.markCompleted(tenantId, idempotencyKey, payload);
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to mark idempotency key as completed", e);
-            }
+            idempotencyStore.markCompleted(tenantId, idempotencyKey, payload);
         }
     }
 

@@ -3,9 +3,11 @@ package com.enterpriseorders.backend.tenant;
 import com.enterpriseorders.backend.tenant.dto.TenantResponse;
 import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
+import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
@@ -21,6 +23,8 @@ class TenantControllerTest {
     @Autowired private ObjectMapper objectMapper;
     @MockBean private CreateTenantUseCase createTenantUseCase;
     @MockBean private GetTenantQuery getTenantQuery;
+    @MockBean private TenantRepository tenantRepository;
+    @MockBean private TenantContext tenantContext;
 
     private static final String BASE = "/api/v1/tenants";
     private final TenantResponse mockTenant = new TenantResponse(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA");

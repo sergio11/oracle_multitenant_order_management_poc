@@ -33,9 +33,9 @@ graph TB
 
     subgraph SpringBoot["☕ Spring Boot Application"]
         direction TB
+        Security["🛡️ Spring Security<br/>HTTP Basic Auth (order -100)"]
         CorrelationFilter["🔗 CorrelationFilter<br/>X-Correlation-ID"]
         TenantFilter["🔍 TenantContextFilter<br/>X-Tenant-ID → ThreadLocal"]
-        Security["🛡️ Spring Security<br/>HTTP Basic Auth"]
 
         Controllers["📡 REST Controllers<br/>Tenant · Order · Reporting"]
         Services["⚙️ Application Services<br/>Use Case Interfaces (11)"]
@@ -50,10 +50,10 @@ graph TB
         MV["📊 Materialized Views<br/>mv_order_daily<br/>mv_product_sales"]
     end
 
-    Client -->|"HTTP + X-Tenant-ID"| CorrelationFilter
+    Client -->|"HTTP + X-Tenant-ID"| Security
+    Security --> CorrelationFilter
     CorrelationFilter --> TenantFilter
-    TenantFilter --> Security
-    Security --> Controllers
+    TenantFilter --> Controllers
     Controllers --> Services
     Services --> Adapters
     Adapters -->|"JDBC / UCP"| PDB
@@ -62,7 +62,7 @@ graph TB
     PDB --> MV
 ```
 
----
+> 🛡️ **Actual filter order**: Spring Security's filter chain runs at order `-100`, i.e. **before** the correlation and tenant servlet filters (which have no explicit order). Requests are authenticated first, then correlation/tenant context is established.
 
 ## 🏢 Enterprise Target Architecture
 
@@ -146,7 +146,7 @@ Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inven
 | ⚡ **Atomic business logic** | PL/SQL `confirm_order` procedure: validates + locks + reserves + transitions + audits + outbox in one transaction. |
 | 🔷 **Hexagonal architecture** | Clean port/adapter separation. Controllers depend on use case interfaces, services depend on repository interfaces. Domain has zero infrastructure dependencies. |
 | 🔄 **Idempotent operations** | Confirm order and payment registration are idempotent via `idempotency_key` table — safe under retries and network partitions. |
-| 📦 **Transactional outbox** | Outbox events written atomically by PL/SQL within the same transaction as business mutations — guaranteed at-least-once delivery. |
+| 📦 **Transactional outbox** | Outbox events written atomically by PL/SQL within the same transaction as business mutations. Publisher/relayer is out of POC scope (see Known Limitations). |
 | 🛡️ **Pessimistic locking** | `SELECT FOR UPDATE` on inventory prevents overselling. Concurrency test proves exactly-1-of-N success with stock=1. |
 | 👤 **Least privilege** | Three Oracle users: `APP_OWNER` (DDL), `APP_RUNTIME` (DML), `APP_REPORTING` (read-only). |
 | 📊 **Materialized Views** | OLTP-reporting separation via `MV_ORDER_DAILY_SUMMARY` and `MV_PRODUCT_SALES_SUMMARY` with on-demand refresh. |
@@ -232,7 +232,7 @@ The `IDEMPOTENCY_KEY` table with unique constraint per tenant prevents duplicate
 
 ```mermaid
 flowchart TD
-    A["📨 Request + Idempotency-Key"] --> B{"🔍 Key exists?"}
+    A["📨 Request + Idempotency-Key"] --> B{"🔍 Key exists?<br/>(status check inside action)"}
     B -->|"✅ Yes"| C["📋 Return cached result"]
     B -->|"❌ No"| D["💾 INSERT PENDING<br/>(optimistic lock)"]
     D --> E{"Insert succeeded?"}
@@ -247,6 +247,8 @@ flowchart TD
     style H fill:#3498db,color:#fff
 ```
 
+The key is **bound to operation + aggregateId**: reusing a key against a different operation or aggregate returns `409 IDEMPOTENCY_KEY_CONFLICT`.
+
 ### 📦 Transactional Outbox Pattern (SRS §63)
 
 Outbox events are written by PL/SQL **within the same transaction** as business mutations:
@@ -256,7 +258,6 @@ sequenceDiagram
     participant S as ⚙️ Service
     participant P as 🗄️ PL/SQL
     participant T as 📦 Outbox Table
-    participant C as 📡 Consumer
 
     S->>P: confirm_order(order_id)
     activate P
@@ -264,11 +265,10 @@ sequenceDiagram
     P-->>T: INSERT outbox_event
     P-->>S: Success
     deactivate P
-    T->>C: Poll & publish events
-    C->>T: Mark as published
+    Note over T: 📤 Publisher/relayer is OUT OF POC SCOPE<br/>events stay NEW until an external consumer is built
 ```
 
-This guarantees atomic consistency — the outbox event cannot exist without the business mutation, and vice versa.
+This guarantees atomic consistency — the outbox event cannot exist without the business mutation, and vice versa. **No component in this POC polls the outbox or marks events as PUBLISHED.**
 
 ---
 
@@ -277,22 +277,22 @@ This guarantees atomic consistency — the outbox event cannot exist without the
 ```mermaid
 sequenceDiagram
     participant C as 🌐 Client
+    participant SS as 🛡️ Spring Security
     participant CF as 🔗 CorrelationFilter
     participant TF as 🔍 TenantContextFilter
-    participant SS as 🛡️ Spring Security
     participant CO as 📡 Controller
     participant SV as ⚙️ Service
     participant DA as 🗃️ DAO
     participant DS as 🔗 TenantAwareDataSource
     participant DB as 🗄️ Oracle VPD
 
-    C->>CF: HTTP Request + X-Tenant-ID
+    C->>SS: HTTP Request + X-Tenant-ID
+    SS->>SS: Authenticate + Authorize (order -100)
+    SS->>CF: Forward
     CF->>CF: Set X-Correlation-ID in MDC
     CF->>TF: Forward
     TF->>TF: Resolve tenant → ThreadLocal
-    TF->>SS: Forward
-    SS->>SS: Authenticate + Authorize
-    SS->>CO: Forward
+    TF->>CO: Forward
     CO->>SV: Use Case Interface
     SV->>DA: Repository Interface
     DA->>DS: getConnection()
@@ -300,7 +300,7 @@ sequenceDiagram
     DB-->>DS: Connection with VPD active
     DA->>DB: SQL Query (auto-filtered by VPD)
     DB-->>DA: Tenant-isolated results
-    DA-->>SV: Domain Object
+    DA-->>SV: OrderResponse DTO
     SV-->>CO: Response DTO
     CO-->>C: HTTP Response + X-Correlation-ID
 ```
@@ -313,9 +313,11 @@ sequenceDiagram
 
 Tenant isolation is enforced at the database level using Oracle VPD/DBMS_RLS:
 
-- 🗃️ **14 tables** covered by VPD policies (tenant, customer, product, inventory, orders, payments, audit, outbox, etc.)
+- 🗃️ **14 VPD policies** on tenant-aware tables (customer, product, inventory, orders, payments, audit, outbox, idempotency key, materialized views, …) — added via V011–V015
+- 🚫 **`TENANT` table has no VPD policy** — required for tenant resolution before context exists
 - 🔒 **Fail-closed predicate**: Without `SYS_CONTEXT('APP_CTX','TENANT_ID')`, queries return zero rows
 - 🤖 **Automatic filtering**: Every SQL statement (SELECT, INSERT, UPDATE, DELETE) is filtered by tenant
+- 📊 **Materialized views** carry VPD policies without `sec_relevant_cols` — always applied
 - 🛡️ **Defense-in-depth**: Even SQL injection cannot leak cross-tenant data
 
 ### 📋 Order Lifecycle Management
@@ -342,9 +344,12 @@ stateDiagram-v2
     CANCELLED --> [*]
 ```
 
-- ✅ State transitions are validated by `OrderStatus.canTransitionTo()`
+- ✅ **PL/SQL (`pkg_order_management`) is the authoritative lifecycle** — status transitions are enforced there inside each procedure
+- 💎 Java domain (`Order`, `OrderStatus.canTransitionTo()`) **documents** the state machine but is not instantiated in the current request flow (see Known Limitations)
+- ➕ **Multi-line orders**: order lines can be added while the order is `DRAFT` or `PENDING`
 - ⚡ PL/SQL `confirm_order` atomically: validates → locks inventory → reserves stock → transitions status → writes audit → writes outbox
 - 🔄 Idempotent confirm/payment operations prevent duplicate processing
+- ⚠️ Error codes mapped from PL/SQL: `ORDER_ALREADY_PAID`, `PAYMENT_AMOUNT_INVALID`, `PAYMENT_CURRENCY_MISMATCH`, `ORDER_SHIPPED_NOT_CANCELLABLE`
 
 ### 🛡️ Inventory Concurrency Control
 
@@ -360,18 +365,17 @@ Pessimistic locking prevents overselling:
 Critical operations are idempotent via `idempotency_key` table:
 
 - 📨 `confirm_order` and `register_payment` accept `Idempotency-Key` header
-- 📝 First execution: insert PENDING → execute → mark COMPLETED (all in one transaction)
-- 🔁 Retry: return cached result without re-execution
-- 🔒 Unique constraint per tenant prevents race conditions
+- 📝 First execution: insert PENDING → execute → mark COMPLETED (all in one transaction); the status check happens **inside** the idempotent action
+- 🔁 Retry with the same key returns the cached result without re-execution
+- 🔒 Key is bound to **operation + aggregateId** — misuse returns `409 IDEMPOTENCY_KEY_CONFLICT`; unique constraint per tenant prevents race conditions
 
 ### 📦 Transactional Outbox Pattern
 
 Reliable event publishing without distributed transactions:
 
 - 📦 Outbox events written by PL/SQL **within the same transaction** as business mutations
-- ✅ Guaranteed at-least-once delivery
-- 📡 Consumer polls `outbox_event` table and marks events as published
 - 🔗 No dual-write problem — outbox and business data are always consistent
+- 🚧 **Publisher/relayer is out of POC scope**: no component polls `outbox_event` or marks events as `PUBLISHED` (events remain `NEW`)
 
 ### 📊 Materialized View Reporting
 
@@ -389,7 +393,8 @@ Enterprise-grade observability stack:
 
 - 🔗 **Correlation ID**: `X-Correlation-ID` propagated through filters, MDC, and database calls
 - 📝 **Structured logging**: JSON format with timestamp, level, service, thread, correlationId, tenantId
-- 📊 **Prometheus metrics**: Micrometer + Actuator for health, metrics, and Prometheus scraping
+- 🏥 **Health**: `GET /internal/health` (actuator base-path `/internal`, permitAll)
+- 📊 **Prometheus metrics**: `GET /internal/prometheus` (authenticated) via Micrometer + Actuator
 - 🗄️ **PL/SQL audit trail**: `audit_event` table records all state transitions with actor and correlation ID
 
 ---
@@ -404,17 +409,24 @@ Enterprise-grade observability stack:
 | `oracle.username` | `ORACLE_USER` | `APP_RUNTIME` | 👤 Database username |
 | `oracle.password` | `ORACLE_PASSWORD` | — (required) | 🔑 Database password |
 | `oracle.ucp.max-pool-size` | — | `20` | 📊 Maximum connection pool size |
-| `app.security.admin.password` | `APP_ADMIN_PASSWORD` | `changeme` | 🔑 Admin user password |
-| `app.security.operator.password` | `APP_OPERATOR_PASSWORD` | `changeme` | 🔑 Operator user password |
+| `app.security.admin.password` | `APP_ADMIN_PASSWORD` | `changeme` | 🔑 Admin user password (HTTP Basic `admin`) |
+| `app.security.operator.password` | `APP_OPERATOR_PASSWORD` | `changeme` | 🔑 Operator user password (HTTP Basic `operator`) |
+| `flyway.url` | — | `jdbc:oracle:thin:@localhost:1521/pdb_oltp` | 🔄 Flyway migrate URL (Maven plugin default) |
+| `flyway.user` | — | `APP_OWNER` | 🔄 Flyway migrate user (Maven plugin default) |
+| `flyway.password` | — | — (pass `-Dflyway.password=...`) | 🔄 Flyway migrate password — no default, supplied at invocation |
+| `flyway.locations` | — | `filesystem:../database/migrations` | 🔄 Migration scripts location (run from `backend/`) |
 
 ### 🐳 Container Configuration
 
+gvenzl/oracle-free supported variables:
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ORACLE_SID` | `CDB1` | 🗄️ Oracle System Identifier |
-| `ORACLE_PDB` | `PDB_OLTP` | 📦 Pluggable Database name |
-| `ORACLE_PWD` | — (required) | 🔑 Oracle SYS/SYSTEM password |
+| `ORACLE_PASSWORD` | — (required) | 🔑 SYS/SYSTEM password (first start) |
+| `ORACLE_DATABASE` | `PDB_OLTP` | 📦 Custom PDB created on first start (matches `jdbc:oracle:thin:@localhost:1521/pdb_oltp`) |
 | `ORACLE_LISTENER_PORT` | `1521` | 🌐 Oracle listener port |
+
+> ⚠️ `ORACLE_SID` / `ORACLE_PDB` are **not** supported by gvenzl images — do not set. Init scripts are mounted at `/container-entrypoint-initdb.d` (executed as SYS on first start).
 
 ---
 
@@ -427,24 +439,23 @@ cd backend
 mvn clean test
 ```
 
+> ✅ **105 tests in 16 test classes — 0 failures.**
+
 ### 📋 Test Types
 
 | Type | File | What It Tests |
 |------|------|---------------|
 | 🧪 Unit | `OrderServiceTest.java` | Order service logic, idempotency, tenant context |
-| 🧪 Unit | `PlsqlErrorMapperTest.java` | Oracle error code → API error code mapping |
+| 🧪 Unit | `PlsqlErrorMapperTest.java` | Oracle error code → API error mapping (incl. `ORDER_ALREADY_PAID`, `PAYMENT_AMOUNT_INVALID`, `PAYMENT_CURRENCY_MISMATCH`, `ORDER_SHIPPED_NOT_CANCELLABLE`) |
 | 🧪 Unit | `GlobalExceptionHandlerTest.java` | Exception → JSON error response mapping |
+| 🧪 Unit | (13 more classes) | Controllers, filters, DAOs, tenant context, reporting, rate limiter, executor |
 | 🔗 Integration | `IT_order_to_payment.sql` | Full lifecycle: create → confirm → pay → MV refresh → assert |
 | ⚡ Concurrency | `run_concurrency_test.bat` | N workers compete for 1 stock unit → exactly 1 confirms |
 | 🔒 Security | `T_security_tenant_isolation.sql` | VPD: tenant 1 cannot see tenant 2 data |
 
 ### 📊 Test Coverage
 
-| Component | Coverage | Tests |
-|-----------|----------|-------|
-| PlsqlErrorMapper | 100% ✅ | 9 tests (all ORA code mappings) |
-| GlobalExceptionHandler | 100% ✅ | 7 tests (all exception types) |
-| OrderService | 85%+ ✅ | 8 tests (create, confirm, cancel, idempotency, tenant context) |
+JaCoCo generates coverage reports at `backend/target/site/jacoco` (after `mvn test`); no coverage gate is enforced.
 
 ### ⚡ Concurrency Test
 
@@ -454,7 +465,7 @@ cd tests/concurrency
 run_concurrency_test.bat
 ```
 
-> Verifies pessimistic locking: with stock=1 and 5 parallel workers, exactly 1 worker confirms.
+> Verifies pessimistic locking: with stock=1 and 5 parallel workers, exactly 1 worker confirms. Helper scripts in the same folder: `C_setup_stock.sql`, `C_concurrent_orders_worker.sql`, `C_worker_runner.bat`, `C_assert_results.sql`.
 
 ### 🔒 Security Test
 
@@ -494,12 +505,14 @@ poc_oracle/
 │       │   ├── 📄 application.yml          # Main config (local profile)
 │       │   ├── 📄 application-test.yml     # Test profile
 │       │   └── 📄 application-prod.yml     # Production profile
-│       └── 📂 test/java/.../               # Unit tests (OrderService, PlsqlErrorMapper, GlobalExceptionHandler)
+│       └── 📂 test/java/.../               # 16 test classes / 105 tests (JaCoCo report under target/site/jacoco)
 ├── 🗄️ database/
-│   ├── 📂 migrations/                      # 14 Flyway-versioned SQL files (V001-V014)
-│   ├── 📂 packages/                        # PL/SQL package specs + bodies + deployment script
+│   ├── 📂 migrations/                      # 17 Flyway-versioned SQL files (V001-V017)
+│   │                                        #   V015 VPD for idempotency key · V016 ck_idem_status fix · V017 runtime grants
+│   ├── 📂 packages/                        # PL/SQL package specs (pks_*) + bodies (pkb_*) + deploy script
 │   ├── 🔒 security/                        # VPD predicate function + policy application script
-│   └── 🌱 seed/                            # Idempotent seed data (3 tenants, products, inventory)
+│   └── 🌱 seed/                            # Idempotent seed (3 tenants, products, inventory for all products,
+│                                            #   multi-line demo order SO-ACME-0002, per-tenant VPD context)
 ├── 🔄 goldengate/
 │   ├── 📂 extract/                         # GGSCI extract group setup
 │   ├── 📂 replicat/                        # GGSCI replicat group setup
@@ -513,7 +526,7 @@ poc_oracle/
 │   └── 🌐 networking/                      # Network topology documentation
 └── 🧪 tests/
     ├── 🔗 integration/                     # End-to-end order-to-payment flow
-    ├── ⚡ concurrency/                     # Parallel worker script + orchestrator
+    ├── ⚡ concurrency/                     # run_concurrency_test.bat + C_* worker/setup/assert helpers
     └── 🔒 security/                        # VPD cross-tenant isolation test
 ```
 
@@ -531,17 +544,20 @@ poc_oracle/
 
 ```bash
 cd infrastructure/podman
-cp .env.example .env    # Edit .env and set ORACLE_PWD
+cp .env.example .env    # Edit .env and set ORACLE_PASSWORD (and ORACLE_DATABASE=PDB_OLTP)
 podman compose up -d
 ```
 
 > ⏳ Wait ~90 seconds for Oracle to be ready (health check passes).
+> Init scripts under `scripts/` are mounted at `/container-entrypoint-initdb.d` (run on first start as SYS).
 
 ### 2️⃣ Run Database Migrations
 
 ```bash
 cd ../../backend
-mvn flyway:migrate
+mvn flyway:migrate "-Dflyway.password=<APP_OWNER password>"
+# Defaults: flyway.user=APP_OWNER, flyway.url=jdbc:oracle:thin:@localhost:1521/pdb_oltp,
+# migrations from filesystem:../database/migrations (V001-V017)
 ```
 
 ### 3️⃣ Deploy PL/SQL Packages
@@ -554,19 +570,21 @@ sqlplus APP_OWNER/<password>@localhost:1521/PDB_OLTP @database/packages/deploy_p
 
 ```bash
 mvn spring-boot:run
+# Default users: admin / changeme (ADMIN) and operator / changeme (OPERATOR),
+# overridable via APP_ADMIN_PASSWORD / APP_OPERATOR_PASSWORD
 ```
 
 ### 5️⃣ Verify
 
 ```bash
-# 🏥 Health check
+# 🏥 Health check (permitAll; actuator base-path is /internal)
 curl http://localhost:8080/internal/health
 
 # 📦 Create order (requires ORDER_OPERATOR role)
 curl -X POST http://localhost:8080/api/v1/orders \
   -H "Content-Type: application/json" \
   -H "X-Tenant-ID: ACME" \
-  -u operator:operator123 \
+  -u operator:changeme \
   -d '{"customerId":1,"currency":"USD"}'
 ```
 
@@ -574,16 +592,18 @@ curl -X POST http://localhost:8080/api/v1/orders \
 
 ## 🎯 Demo Flow
 
-1. 🏢 **Create tenant** — ACME, GLOBEX, or INITECH (seeded automatically)
+1. 🏢 **Create tenant** — `POST /api/v1/tenants` requires role **ADMIN** (`-u admin:changeme`); ACME, GLOBEX, INITECH are seeded automatically
 2. 📦 **Create order** — `POST /api/v1/orders` with customer and currency
-3. 📝 **Add order lines** — `POST /api/v1/orders/{id}/lines` with product, quantity, warehouse
-4. ✅ **Confirm order** — `POST /api/v1/orders/{id}/confirm` (reserves inventory atomically)
+3. 📝 **Add order lines** — `POST /api/v1/orders/{id}/lines` (multi-line orders) while the order is `DRAFT` or `PENDING`
+4. ✅ **Confirm order** — `POST /api/v1/orders/{id}/confirm` (reserves inventory atomically; lifecycle enforced by PL/SQL)
 5. 💳 **Register payment** — `POST /api/v1/orders/{id}/payments` (idempotent by payment reference)
 6. 🔄 **Refresh materialized views** — `POST /api/v1/reports/refresh` (ADMIN role required)
 7. 📊 **Query reports** — `GET /api/v1/reports/orders/daily` and `GET /api/v1/reports/products/top`
 8. 🔐 **Verify tenant isolation** — different `X-Tenant-ID` headers see different data
 9. ⚡ **Run concurrency test** — prove pessimistic locking with parallel workers
 10. 🧪 **Run security test** — prove VPD blocks cross-tenant access
+
+> 🌱 Seed data includes inventory for **all** products and a multi-line demo order **SO-ACME-0002** (seed runs with per-tenant VPD context).
 
 ---
 
@@ -639,7 +659,23 @@ curl -X POST http://localhost:8080/api/v1/orders \
 | 🌐 Site failure | Oracle Data Guard | 🏗️ Architecture |
 | ⚠️ Logical data error | Flashback / RMAN recovery | 🏗️ Architecture |
 | 💽 Physical data loss | RMAN backup | 🏗️ Architecture |
-| 🔄 Downstream integration | GoldenGate replication | 📄 Documented |
+| 🔄 Downstream integration | GoldenGate replication | 📄 Documented (not deployed locally) |
+
+---
+
+## ⚠️ Known Limitations
+
+Honest boundaries of this POC:
+
+- 🚫 **No CI pipeline** — tests must be run locally (`cd backend && mvn clean test`)
+- 📦 **Outbox publisher not implemented** — no component polls `outbox_event` or marks events `PUBLISHED`; events stay `NEW`
+- 🌐 **Customer / Product / Inventory REST endpoints not implemented** (FR-004/005/006) — the API covers orders, tenants, and reports
+- 🏁 **Order flow ends at CONFIRMED/PAID** — no `SHIPPED`/`COMPLETED` endpoints (the state machine shows the full target lifecycle)
+- 👤 **Tenant resolved from `X-Tenant-ID` header + in-memory users** — not from identity claims; an operator can target any tenant by header (VPD still isolates once context is set, but user→tenant authorization binding is not implemented)
+- 🏗️ **GoldenGate / RAC / Data Guard not running locally** — enterprise target architecture is documented only
+- ☕ **Spring Boot 3.3.5** — current pinned version
+- 📄 **PL/SQL package sources duplicated** — specs exist both in V010 migrations and `database/packages/pks_*` (bodies in `pkb_*`); they must be kept in sync manually
+- 💎 **Java domain aggregate not wired into the request flow** — PL/SQL (`pkg_order_management`) is the authority; `Order` / `OrderStatus.canTransitionTo()` document the state machine but are not instantiated on the live path
 
 ---
 

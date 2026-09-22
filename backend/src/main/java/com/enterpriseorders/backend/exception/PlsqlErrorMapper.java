@@ -23,14 +23,18 @@ public final class PlsqlErrorMapper {
         Map.entry("ORA-20020", new ErrorMapping("TENANT_SUSPENDED", "Tenant is not ACTIVE", 400)),
         Map.entry("ORA-20021", new ErrorMapping("CUSTOMER_TENANT_MISMATCH", "Customer does not belong to this tenant", 400)),
         Map.entry("ORA-20022", new ErrorMapping("PRODUCT_TENANT_MISMATCH", "Product does not belong to this tenant", 400)),
-        Map.entry("ORA-20023", new ErrorMapping("ORDER_NOT_DRAFT", "Cannot add lines to a non-DRAFT order", 400)),
+        Map.entry("ORA-20023", new ErrorMapping("ORDER_NOT_DRAFT", "Cannot add lines to a non-DRAFT/PENDING order", 400)),
         Map.entry("ORA-20024", new ErrorMapping("ORDER_NOT_FOUND", "Order or warehouse not found", 404)),
         Map.entry("ORA-20025", new ErrorMapping("ORDER_NOT_CONFIRMABLE", "Order cannot be confirmed from current status", 400)),
         Map.entry("ORA-20026", new ErrorMapping("ORDER_NO_LINES", "Order has no lines - cannot confirm", 400)),
         Map.entry("ORA-20027", new ErrorMapping("ORDER_NOT_CANCELLABLE", "Order cannot be cancelled from current status", 400)),
         Map.entry("ORA-20028", new ErrorMapping("PAYMENT_STATE_INVALID", "Payment requires order CONFIRMED or later", 400)),
         Map.entry("ORA-20029", new ErrorMapping("DUPLICATE_PAYMENT_REF", "Duplicate payment reference", 409)),
-        Map.entry("ORA-20030", new ErrorMapping("INVENTORY_NOT_FOUND_TEST", "Inventory record not found for test stock update", 404))
+        Map.entry("ORA-20030", new ErrorMapping("INVENTORY_NOT_FOUND_TEST", "Inventory record not found for test stock update", 404)),
+        Map.entry("ORA-20031", new ErrorMapping("ORDER_ALREADY_PAID", "Order already paid; duplicate payment rejected", 409)),
+        Map.entry("ORA-20032", new ErrorMapping("PAYMENT_AMOUNT_INVALID", "Payment amount must be positive", 400)),
+        Map.entry("ORA-20033", new ErrorMapping("PAYMENT_CURRENCY_MISMATCH", "Payment currency does not match order currency", 400)),
+        Map.entry("ORA-20034", new ErrorMapping("ORDER_SHIPPED_NOT_CANCELLABLE", "Cannot cancel a shipped order", 409))
     );
 
     private PlsqlErrorMapper() {

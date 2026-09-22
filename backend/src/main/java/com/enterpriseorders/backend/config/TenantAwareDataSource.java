@@ -47,6 +47,7 @@ public class TenantAwareDataSource implements DataSource {
     private void applyTenantContext(Connection conn) {
         Long tenantId = tenantContext.getTenantId();
         if (tenantId == null) {
+            clearTenantContext(conn);
             return;
         }
         try (var ps = conn.prepareStatement("BEGIN pkg_tenant.set_tenant_context(?); END;")) {
@@ -109,11 +110,24 @@ public class TenantAwareDataSource implements DataSource {
                 Connection.class.getClassLoader(),
                 new Class<?>[]{ Connection.class },
                 (proxy, method, args) -> {
-                    if ("close".equals(method.getName())) {
-                        clearTenantContext(conn);
-                        return null;
+                    try {
+                        if ("close".equals(method.getName())) {
+                            clearTenantContext(conn);
+                        }
+                        return method.invoke(conn, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        Throwable cause = e.getCause() != null ? e.getCause() : e;
+                        if (cause instanceof RuntimeException runtimeException) {
+                            throw runtimeException;
+                        }
+                        if (cause instanceof Error error) {
+                            throw error;
+                        }
+                        if (cause instanceof SQLException sqlException) {
+                            throw sqlException;
+                        }
+                        throw new SQLException("Error invoking connection method: " + method.getName(), cause);
                     }
-                    return method.invoke(conn, args);
                 });
     }
 }

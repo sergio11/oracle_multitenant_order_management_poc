@@ -3,16 +3,21 @@ REM =====================================================================
 REM Concurrency test orchestrator (SRS §37, §93, FT-003, FT-004)
 REM
 REM Sets up a single row of stock for one product/warehouse (qty=1),
-REM launches N workers in parallel, then asserts exactly 1 succeeded
-REM and the stock reservation is consistent.
+REM launches N workers in parallel, waits for THEIR done-markers (not
+REM for every sqlplus.exe on the machine), then asserts exactly 1
+REM succeeded and the stock reservation is consistent.
 REM
-REM Requires sqlplus on PATH and the DB reachable at localhost:1521.
+REM Requires sqlplus on PATH, run from the repository root.
+REM Connection defaults match infrastructure/podman/.env.example.
 REM =====================================================================
 setlocal enabledelayedexpansion
 
 if not defined DB_USER set DB_USER=app_runtime
-if not defined DB_PASS set DB_PASS=ChangeMe123!
+if not defined DB_PASS set DB_PASS=LabRuntimePass1
 if not defined DB_CONN set DB_CONN=%DB_USER%/%DB_PASS%@//localhost:1521/pdb_oltp
+if not defined DB_OWNER_USER set DB_OWNER_USER=app_owner
+if not defined DB_OWNER_PASS set DB_OWNER_PASS=LabOwnerPass1
+if not defined DB_OWNER_CONN set DB_OWNER_CONN=%DB_OWNER_USER%/%DB_OWNER_PASS%@//localhost:1521/pdb_oltp
 if not defined TENANT_ID set TENANT_ID=1
 if not defined CUSTOMER_ID set CUSTOMER_ID=1
 if not defined PRODUCT_ID set PRODUCT_ID=1
@@ -20,78 +25,81 @@ if not defined WAREHOUSE_ID set WAREHOUSE_ID=1
 if not defined WORKERS set WORKERS=5
 
 set RESULTS_TBL=concurrency_results_%RANDOM%
+set TEST_RC=1
 
 echo === Concurrency test: !WORKERS! workers, stock qty=1 ===
 
-REM 1) Create results table
+REM Clear stale done-markers from previous runs
+del /q worker_*.done 2>nul
+
+REM 1) Create results table as APP_OWNER, grant runtime access
 (
-  echo CREATE TABLE !RESULTS_TBL! ^(worker_id NUMBER, order_id NUMBER, result VARCHAR2^<30^>, error_msg VARCHAR2^<4000^>, ts TIMESTAMP^);
+  echo WHENEVER SQLERROR EXIT SQL.SQLCODE
+  echo CREATE TABLE !RESULTS_TBL! ^(worker_id NUMBER, order_id NUMBER, result VARCHAR2^(30^), error_msg VARCHAR2^(4000^), ts TIMESTAMP^);
+  echo GRANT SELECT, INSERT ON !RESULTS_TBL! TO app_runtime;
   echo commit;
   echo exit
-) | sqlplus -s %DB_CONN% >nul 2>&1
+) | sqlplus -s "%DB_OWNER_CONN%"
 if errorlevel 1 (
-  echo ERROR: failed to create results table & exit /b 1
+  echo ERROR: failed to create results table !RESULTS_TBL!
+  exit /b 1
 )
 
-REM 2) Reset stock for the product to exactly 1 unit (pessimistic)
-(
-  echo "BEGIN pkg_inventory.set_test_stock(%TENANT_ID%, !PRODUCT_ID!, !WAREHOUSE_ID!, 1); END;"
-  echo "commit;"
-  echo "exit"
-) | sqlplus -s %DB_CONN% >nul 2>&1
+REM 2) Reset stock for the product to exactly 1 unit (pessimistic).
+REM    Separate .sql file (no cmd quoting hazards); errors are shown.
+sqlplus -s "%DB_CONN%" @tests/concurrency/C_setup_stock.sql %TENANT_ID% %PRODUCT_ID% %WAREHOUSE_ID% 1
+if errorlevel 1 (
+  echo ERROR: stock setup failed
+  goto :cleanup_table
+)
 
-REM 3) Launch N workers in parallel
-set PIDS=
+REM 3) Launch N workers in parallel (each drops worker_N.done at the end)
 for /L %%i in (1,1,!WORKERS!) do (
-  start "worker%%i" cmd /c sqlplus -s %DB_CONN% @tests/concurrency/C_concurrent_orders_worker.sql ^
-    !RESULTS_TBL! !TENANT_ID! !CUSTOMER_ID! !PRODUCT_ID! !WAREHOUSE_ID! %%i >worker_%%i.log 2>&1
+  start "worker%%i" tests\concurrency\C_worker_runner.bat "%DB_CONN%" %%i !TENANT_ID! !CUSTOMER_ID! !PRODUCT_ID! !WAREHOUSE_ID! !RESULTS_TBL!
 )
 
-REM 4) Wait for all background workers to finish
+REM 4) Wait for OUR workers' done-markers (per-worker, not machine-wide)
 set TIMEOUT=120
 set ELAPSED=0
 :waitloop
-tasklist /fi "imagename eq sqlplus.exe" 2>nul | find /i "sqlplus" >nul
-if not errorlevel 1 (
-  if !ELAPSED! GEQ %TIMEOUT% (
-    echo TIMEOUT: Workers did not finish in %TIMEOUT% seconds
-    goto :cleanup
-  )
+set ALL_DONE=1
+for /L %%i in (1,1,!WORKERS!) do (
+  if not exist worker_%%i.done set ALL_DONE=0
+)
+if "!ALL_DONE!"=="0" (
+  if !ELAPSED! GEQ %TIMEOUT% goto :timeout_wait
   timeout /t 2 /nobreak >nul
   set /a ELAPSED+=2
   goto :waitloop
 )
+goto :assert
 
-REM 5) Assert: exactly 1 worker CONFIRMED
+:timeout_wait
+echo TIMEOUT: workers did not finish in %TIMEOUT% seconds
+goto :cleanup_table
+
+:assert
+REM 5) Assert: exactly 1 worker CONFIRMED (as APP_OWNER)
+sqlplus -s "%DB_OWNER_CONN%" @tests/concurrency/C_assert_results.sql !RESULTS_TBL!
+if errorlevel 1 (
+  echo CONCURRENCY TEST FAILED
+  set TEST_RC=1
+) else (
+  set TEST_RC=0
+)
+:cleanup_table
+REM 5b) Cleanup results table (APP_OWNER owns it)
 (
-  echo SET SERVEROUTPUT ON
-  echo "COLUMN r FORMAT A30"
-  echo "SELECT result, COUNT(*) FROM !RESULTS_TBL! GROUP BY result;"
-  echo "DECLARE"
-  echo "  v_confirmed NUMBER;"
-  echo "  v_failed    NUMBER;"
-  echo "BEGIN"
-  echo "  SELECT SUM(CASE WHEN result='CONFIRMED' THEN 1 ELSE 0 END),"
-  echo "         SUM(CASE WHEN result='FAILED' THEN 1 ELSE 0 END)"
-  echo "  INTO v_confirmed, v_failed"
-  echo "  FROM !RESULTS_TBL!;"
-  echo "  DBMS_OUTPUT.PUT_LINE('confirmed=' || v_confirmed || ' failed=' || v_failed);"
-  echo "  IF v_confirmed <> 1 THEN"
-  echo "    RAISE_APPLICATION_ERROR(-20920, 'Concurrency invariant violated: expected 1 confirmed, got ' || v_confirmed);"
-  echo "  END IF;"
-  echo "  DBMS_OUTPUT.PUT_LINE('CONCURRENCY TEST PASSED');"
-  echo "END;"
-  echo "/"
-  echo "exit"
-) | sqlplus -s %DB_CONN%
+  echo DROP TABLE !RESULTS_TBL! PURGE;
+  echo exit
+) | sqlplus -s "%DB_OWNER_CONN%" >nul 2>&1
 
-REM 5b) Cleanup results table
-:cleanup
-(
-  echo "DROP TABLE !RESULTS_TBL! PURGE;"
-  echo "exit"
-) | sqlplus -s %DB_CONN% >nul 2>&1
+REM 5c) Cleanup markers (keep worker_*.log for debugging)
+del /q worker_*.done 2>nul
 
-echo === Concurrency test DONE ===
-endlocal
-</arg_value></tool_call>
+if "!TEST_RC!"=="0" (
+  echo === Concurrency test DONE ===
+) else (
+  echo === Concurrency test DONE [FAILED] ===
+)
+exit /b !TEST_RC!

@@ -4,7 +4,6 @@ import com.enterpriseorders.backend.reporting.port.output.RefreshMaterializedVie
 import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
 import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
 import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
-import com.enterpriseorders.backend.tenant.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 

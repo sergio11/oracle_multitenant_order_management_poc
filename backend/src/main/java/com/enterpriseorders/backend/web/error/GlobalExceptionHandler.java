@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -59,6 +60,13 @@ public class GlobalExceptionHandler {
                 .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
                 .collect(Collectors.joining(", "));
         ApiError body = ApiError.of("VALIDATION_ERROR", message, correlationId);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiError> handleMalformedRequest(HttpMessageNotReadableException ex, WebRequest request) {
+        String correlationId = request.getHeader("X-Correlation-ID");
+        ApiError body = ApiError.of("MALFORMED_REQUEST", "INVALID_REQUEST_BODY", correlationId);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 

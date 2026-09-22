@@ -110,6 +110,14 @@ CREATE OR REPLACE PACKAGE pkg_inventory AS
         p_product_id   IN NUMBER,
         p_quantity     IN NUMBER
     );
+
+    -- Test helper: set stock to a specific quantity (concurrency tests)
+    PROCEDURE set_test_stock(
+        p_tenant_id    IN NUMBER,
+        p_product_id   IN NUMBER,
+        p_warehouse_id IN NUMBER,
+        p_qty          IN NUMBER
+    );
 END pkg_inventory;
 /
 

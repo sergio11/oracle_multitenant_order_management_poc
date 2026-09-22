@@ -22,6 +22,11 @@
         <oracle.jdbc.version>23.4.0.24.05</oracle.jdbc.version>
         <flyway.version>10.20.1</flyway.version>
         <flyway.oracle.version>10.20.1</flyway.oracle.version>
+        <!-- flyway-maven-plugin connection defaults (override with -Dflyway.*).
+             Password has NO pom default: pass -Dflyway.password=... at invoke. -->
+        <flyway.url>jdbc:oracle:thin:@localhost:1521/pdb_oltp</flyway.url>
+        <flyway.user>APP_OWNER</flyway.user>
+        <jacoco.version>0.8.12</jacoco.version>
     </properties>
 
     <dependencies>
@@ -105,7 +110,38 @@
                 <version>${flyway.version}</version>
                 <configuration>
                     <driver>oracle.jdbc.OracleDriver</driver>
+                    <url>${flyway.url}</url>
+                    <user>${flyway.user}</user>
+                    <!-- No password default in the pom (security).
+                         Supply at invocation: -Dflyway.password=...
+                         or define the flyway.password property / env. -->
+                    <password>${flyway.password}</password>
+                    <locations>
+                        <location>filesystem:../database/migrations</location>
+                    </locations>
                 </configuration>
+            </plugin>
+            <!-- JaCoCo: coverage measurement only (no coverage gate).
+                 report bound to test phase; prepare-agent sets argLine. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

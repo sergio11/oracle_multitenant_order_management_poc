@@ -5,6 +5,11 @@
 -- business operation to guarantee consistency between DB state and
 -- published events. Uniqueness on (AGGREGATE_TYPE, AGGREGATE_ID,
 -- EVENT_TYPE, STATUS) gives idempotency for publishers/retries.
+--
+-- SCOPE NOTE: the outbox publisher/relayer is OUT OF SCOPE for this
+-- POC. Events are written atomically with the business transaction;
+-- the NEW -> PROCESSING -> PUBLISHED transition will be handled by a
+-- future integration component (not implemented here).
 --=====================================================================
 CREATE TABLE outbox_event (
     event_id        NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

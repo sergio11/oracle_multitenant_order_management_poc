@@ -7,6 +7,9 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -34,6 +37,8 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     public static final String TENANT_HEADER = "X-Tenant-ID";
 
+    private static final Logger log = LoggerFactory.getLogger(TenantContextFilter.class);
+
     private final TenantRepository tenantRepository;
     private final TenantContext tenantContext;
     private final ObjectMapper objectMapper;
@@ -53,6 +58,9 @@ public class TenantContextFilter extends OncePerRequestFilter {
         if (path.startsWith("/actuator")) {
             return true;
         }
+        if (path.startsWith("/internal")) {
+            return true;
+        }
         return false;
     }
 
@@ -64,7 +72,8 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
         String tenantHeader = request.getHeader(TENANT_HEADER);
         if (tenantHeader == null || tenantHeader.isBlank()) {
-            writeError(response, "TENANT_REQUIRED", "Missing X-Tenant-ID header");
+            writeError(response, HttpServletResponse.SC_UNAUTHORIZED,
+                    "TENANT_REQUIRED", "Missing X-Tenant-ID header");
             return;
         }
 
@@ -72,25 +81,30 @@ public class TenantContextFilter extends OncePerRequestFilter {
         try {
             tenantId = tenantRepository.findActiveTenantIdByCode(tenantHeader.trim()).orElse(null);
         } catch (Exception e) {
-            writeError(response, "TENANT_RESOLUTION_ERROR", "Tenant resolution temporarily unavailable");
+            log.error("Tenant resolution failed", e);
+            writeError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "TENANT_RESOLUTION_ERROR", "Tenant resolution temporarily unavailable");
             return;
         }
         if (tenantId == null) {
-            writeError(response, "TENANT_NOT_FOUND", "Unknown or inactive tenant: " + tenantHeader);
+            writeError(response, HttpServletResponse.SC_UNAUTHORIZED,
+                    "TENANT_NOT_FOUND", "Unknown or inactive tenant: " + tenantHeader);
             return;
         }
 
         tenantContext.setTenantId(tenantId);
+        MDC.put("tenantId", String.valueOf(tenantId));
         try {
             filterChain.doFilter(request, response);
         } finally {
             tenantContext.clear();
+            MDC.remove("tenantId");
         }
     }
 
-    private void writeError(HttpServletResponse response, String code, String message)
+    private void writeError(HttpServletResponse response, int status, String code, String message)
             throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setStatus(status);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(objectMapper.writeValueAsString(
                 ApiError.of(code, message, null)));
