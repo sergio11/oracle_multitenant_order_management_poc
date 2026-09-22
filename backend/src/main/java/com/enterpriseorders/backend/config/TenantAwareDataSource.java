@@ -24,15 +24,22 @@ public class TenantAwareDataSource implements DataSource {
 
     private final DataSource delegate;
     private final TenantContextProvider tenantContext;
+    private final String schema;
 
     public TenantAwareDataSource(DataSource delegate, TenantContextProvider tenantContext) {
+        this(delegate, tenantContext, "APP_OWNER");
+    }
+
+    public TenantAwareDataSource(DataSource delegate, TenantContextProvider tenantContext, String schema) {
         this.delegate = delegate;
         this.tenantContext = tenantContext;
+        this.schema = schema;
     }
 
     @Override
     public Connection getConnection() throws SQLException {
         Connection conn = delegate.getConnection();
+        applySchema(conn);
         applyTenantContext(conn);
         return trackAndClear(conn);
     }
@@ -40,8 +47,20 @@ public class TenantAwareDataSource implements DataSource {
     @Override
     public Connection getConnection(String username, String password) throws SQLException {
         Connection conn = delegate.getConnection(username, password);
+        applySchema(conn);
         applyTenantContext(conn);
         return trackAndClear(conn);
+    }
+
+    /**
+     * DAOs use unqualified object names (tenant, sales_order, pkg_*); the
+     * runtime user (APP_RUNTIME) owns nothing, so resolve everything against
+     * the owner schema. Privileges are unchanged - only name resolution.
+     */
+    private void applySchema(Connection conn) throws SQLException {
+        try (var ps = conn.prepareStatement("ALTER SESSION SET CURRENT_SCHEMA = " + schema)) {
+            ps.execute();
+        }
     }
 
     private void applyTenantContext(Connection conn) {

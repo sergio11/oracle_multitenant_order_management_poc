@@ -52,7 +52,16 @@ public class OracleUcpConfig {
     @Value("${oracle.ucp.validate-connection-on-borrow:true}")
     private boolean validateOnBorrow;
 
-    @Bean(name = "oraclePoolDataSource", destroyMethod = "close")
+    @Value("${oracle.schema:APP_OWNER}")
+    private String schema;
+
+    // NOTE: destroyMethod is explicitly disabled. The runtime class returned
+    // by PoolDataSourceFactory exposes no public no-arg close(), so Spring's
+    // DisposableBeanAdapter fails startup with "Could not find a destroy
+    // method named 'close'". The pool is JVM-scoped (server-side sessions are
+    // reclaimed on JVM exit); per-request connections ARE closed properly via
+    // the TenantAwareDataSource proxy.
+    @Bean(name = "oraclePoolDataSource", destroyMethod = "")
     public PoolDataSource oraclePoolDataSource() throws SQLException {
         PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
 
@@ -88,6 +97,6 @@ public class OracleUcpConfig {
     @Primary
     public DataSource dataSource(@Qualifier("oraclePoolDataSource") DataSource oraclePool,
                                  TenantContextProvider tenantContext) {
-        return new TenantAwareDataSource(oraclePool, tenantContext);
+        return new TenantAwareDataSource(oraclePool, tenantContext, schema);
     }
 }

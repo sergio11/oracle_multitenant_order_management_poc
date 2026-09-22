@@ -552,7 +552,7 @@ namespace :qa do
     admin    = [ENV.fetch('QA_ADMIN_USER', 'admin'), env['APP_ADMIN_PASSWORD']]
 
     # 3) Create order (operator)
-    order_body = nil
+    order_id = nil
     begin
       res = http_post("#{BACKEND_URL}/api/v1/orders",
                       '{"customerId":1,"currency":"USD"}',
@@ -560,24 +560,42 @@ namespace :qa do
                       headers: { 'X-Tenant-ID' => 'ACME' })
       ok = res.code.to_i.between?(200, 299)
       check.call('POST /orders (operator)', ok, "HTTP #{res.code} #{res.body}")
-      order_body = JSON.parse(res.body) if ok && res.body && !res.body.empty?
+      order_id = JSON.parse(res.body)['orderId'] if ok && res.body && !res.body.empty?
     rescue StandardError => e
       check.call('POST /orders (operator)', false, e.message)
     end
 
-    # 4) Idempotent retry with same key
+    # 4) Idempotency-Key is honored by confirm/payment (FR-014), NOT by
+    # creation. Make the order confirmable (add a seed line), confirm it
+    # with key K (2xx leaves a COMPLETED record), then reuse K for a
+    # DIFFERENT order -> 409 IDEMPOTENCY_KEY_CONFLICT. Note: a FAILED
+    # confirm rolls back (no record left), so r1 must succeed.
     begin
-      key = "qa-smoke-#{Time.now.to_i}"
-      h = { 'X-Tenant-ID' => 'ACME', 'Idempotency-Key' => key }
-      r1 = http_post("#{BACKEND_URL}/api/v1/orders", '{"customerId":1,"currency":"USD"}',
-                     user: operator, headers: h)
-      r2 = http_post("#{BACKEND_URL}/api/v1/orders", '{"customerId":1,"currency":"USD"}',
-                     user: operator, headers: h)
-      same = r1.code == r2.code && (r1.body == r2.body || r2.code.to_i == 409)
-      check.call('Idempotency-Key retry', r1.code.to_i.between?(200, 299) && same,
-                 "r1=#{r1.code} r2=#{r2.code}")
+      if order_id.nil?
+        check.call('Idempotency-Key conflict -> 409', false, 'no order created in step 3')
+      else
+        # Seed-first IDs (same assumption as customerId=1 in step 3):
+        # PRD-001 -> product 1, WH1 -> warehouse 1, stock 100 each.
+        rl = http_post("#{BACKEND_URL}/api/v1/orders/#{order_id}/lines",
+                       '{"productId":1,"quantity":1,"warehouseId":1}',
+                       user: operator,
+                       headers: { 'X-Tenant-ID' => 'ACME' })
+        if !rl.code.to_i.between?(200, 299)
+          check.call('Idempotency-Key conflict -> 409', false, "addLine HTTP #{rl.code} #{rl.body}")
+        else
+          key = "qa-smoke-#{Time.now.to_i}"
+          h = { 'X-Tenant-ID' => 'ACME', 'Idempotency-Key' => key }
+          r1 = http_post("#{BACKEND_URL}/api/v1/orders/#{order_id}/confirm", '{}',
+                         user: operator, headers: h)
+          r2 = http_post("#{BACKEND_URL}/api/v1/orders/#{order_id + 10_000}/confirm", '{}',
+                         user: operator, headers: h)
+          check.call('Idempotency-Key conflict -> 409',
+                     r1.code.to_i.between?(200, 299) && r2.code.to_i == 409,
+                     "r1=#{r1.code} r2=#{r2.code} #{r2.body}")
+        end
+      end
     rescue StandardError => e
-      check.call('Idempotency-Key retry', false, e.message)
+      check.call('Idempotency-Key conflict -> 409', false, e.message)
     end
 
     # 5) Tenant isolation: GLOBEX must not see ACME-shaped private payload errors
