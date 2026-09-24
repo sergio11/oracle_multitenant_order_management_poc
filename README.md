@@ -607,6 +607,80 @@ curl -X POST http://localhost:8080/api/v1/orders \
 
 ---
 
+## 🧪 QA on Kubernetes (kind + Podman)
+
+Repeatable end-to-end QA on a local kind cluster (separate from the compose lab above). The whole flow is scripted in the `Rakefile` (`rake -T` lists all tasks; run from the repo root).
+
+### Prerequisites
+
+- 🐳 Podman (with machine running), `kind`, `kubectl`, `rake` (Ruby), Maven 3.9+
+- 🆓 Free host ports `8080` (backend) and `1521` (Oracle NodePort)
+- 💾 ~5 GB free RAM (kind node + Oracle 2–3 GB + backend)
+- 📄 `infrastructure/podman/.env` (copy from `.env.example`; lab passwords only)
+
+### Bring-up
+
+```bash
+rake qa:cluster:create   # kind cluster 'poc-qa' (Podman provider)
+rake qa:image:build      # backend image via Podman (multi-stage Dockerfile)
+rake qa:image:load       # load image into the kind node (via tarball)
+rake qa:deploy           # namespace + secrets + Oracle StatefulSet + backend
+rake qa:db:init          # flyway migrate (V001–V018) + PL/SQL packages + seed
+rake qa:wait             # until Oracle + backend rollout are Ready
+rake qa:smoke            # 8 API checks: health, auth, order, idempotency-409, reports, refresh, RBAC
+```
+
+### DB test suites (run in the Oracle pod, which ships sqlplus)
+
+```bash
+# Copy a suite into the pod and run it (APP_RUNTIME for IT/security):
+kubectl cp tests/integration/IT_order_to_payment.sql poc-qa/oracle-0:/tmp/it.sql
+kubectl exec -n poc-qa oracle-0 -- bash -lc \
+  "sqlplus -L -S app_runtime/LabRuntimePass1@//localhost:1521/pdb_oltp @/tmp/it.sql"
+
+# Concurrency (FT-003): 10 racers on stock=1, exactly 1 CONFIRMED
+rake qa:db:concurrency   # QA_WORKERS=10 by default; restores stock to 100 afterwards
+
+# Failure test FT-001: controlled behavior on DB outage
+kubectl scale statefulset oracle -n poc-qa --replicas=0
+# ... POST /orders -> controlled 503 JSON (~30s pool timeout, no hang);
+# ... pod goes Unready (readiness includes db) but is NOT restarted ...
+kubectl scale statefulset oracle -n poc-qa --replicas=1
+rake qa:wait && rake qa:smoke   # recovery check
+```
+
+### QA evidence (live runs, kind `poc-qa`)
+
+| Check | Result |
+|---|---|
+| `mvn clean test` | 105/105 green (JaCoCo report, no gate by design) |
+| `rake qa:smoke` | 8/8 PASS (health, 401, create, idempotency 409, tenant reports, refresh, RBAC) |
+| `IT_order_to_payment.sql` | PASSED (confirm → payment → MV → audit → outbox asserts) |
+| `T_security_tenant_isolation.sql` | PASSED (both directions + fail-closed + INSERT rejected) |
+| Concurrency, 10 workers, stock=1 | `total=10 confirmed=1 failed=9` PASSED |
+| FT-001 Oracle down | controlled 503 JSON, no hang; pod Unready, no restart; full recovery + smoke green |
+| FT-002 pool exhaustion | excluded by design (aggressive for lab PCs; covered by UCP wait-timeout config) |
+
+### Privilege map (SRS §112)
+
+| What | Who | Notes |
+|---|---|---|
+| Owns schema objects, runs Flyway DDL | `APP_OWNER` | migrations V001–V018, packages (definer's rights) |
+| Runs the application | `APP_RUNTIME` | least privilege: SELECT + idempotency DML + package EXECUTE; never `EXEMPT ACCESS POLICY` |
+| Reporting workload | `APP_REPORTING` | SELECT on tables/MVs + package EXECUTE (read path) |
+| Bootstraps users, `EXEMPT ACCESS POLICY` → `APP_OWNER` | `SYS` | `infrastructure/podman/scripts/01-init-db.sql` (first boot only) |
+| MV refresh at runtime | `refresh_reporting_views` (V018) | definer's-rights proc: exempt via APP_OWNER; must run context-free |
+
+### QA lessons (also in Known Limitations)
+
+- 🌱 Seed requires package bodies deployed **first** (`qa:db:init` order): only the designated package may touch `APP_CTX` (ORA-01031 otherwise). Seed ends with explicit `COMMIT` (never rely on client exit-commit).
+- 🔑 Seed IDs are **not deterministic** (identity columns): suites resolve tenant/customer/product/warehouse **by business code**, never by hardcoded `1`.
+- 🩺 Probes: liveness = `/internal/health/liveness` (app-only), readiness = `/internal/health/readiness` (**includes `db`**). A DB outage makes the pod Unready without restarting it.
+- 🔄 `qa:wait` tracks the rollout (replica counts lie during rolling updates).
+- 🐳 kind nodes don't auto-start after a machine reboot: `podman start poc-qa-control-plane` (data survives on the PVC).
+
+---
+
 ## 🛠️ Technology Stack
 
 ### ☕ Application Layer
@@ -676,6 +750,10 @@ Honest boundaries of this POC:
 - ☕ **Spring Boot 3.3.5** — current pinned version
 - 📄 **PL/SQL package sources duplicated** — specs exist both in V010 migrations and `database/packages/pks_*` (bodies in `pkb_*`); they must be kept in sync manually
 - 💎 **Java domain aggregate not wired into the request flow** — PL/SQL (`pkg_order_management`) is the authority; `Order` / `OrderStatus.canTransitionTo()` document the state machine but are not instantiated on the live path
+- 🌱 **Seed order matters** — package bodies must be deployed before seeding (`qa:db:init` order): only `pkg_tenant` may touch `APP_CTX` (direct `DBMS_SESSION` calls raise ORA-01031); seed ends with an explicit `COMMIT`
+- 🔑 **Seed IDs are not deterministic** — identity columns vary per environment; suites resolve tenant/customer/product/warehouse by business code, never by hardcoded IDs
+- 🩺 **K8s probe split** — liveness is app-only while readiness includes `db`: a DB outage sheds traffic (Unready) without restarting the pod
+- 🐳 **kind nodes don't survive machine reboots** — recover with `podman start poc-qa-control-plane` (Oracle data survives on its PVC)
 
 ---
 

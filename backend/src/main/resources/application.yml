@@ -48,6 +48,12 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+      # FT-001: db belongs to the readiness group (not liveness).
+      # DB outage -> pod Unready (traffic shed, controlled 503s) but
+      # NOT restarted. Liveness stays app-only by default.
+      group:
+        readiness:
+          include: readinessState,db
   metrics:
     tags:
       application: ${spring.application.name}

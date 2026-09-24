@@ -30,6 +30,10 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+      # FT-001: db belongs to the readiness group (not liveness).
+      group:
+        readiness:
+          include: readinessState,db
 
 logging:
   level:
