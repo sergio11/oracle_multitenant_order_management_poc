@@ -71,10 +71,23 @@ public class ReportingDao implements ReportingQueryPort, RefreshMaterializedView
     /**
      * Refreshes the reporting materialized views (SRS §42).
      * Called on demand to bring MVs up to date with OLTP.
+     *
+     * NOTE: never call DBMS_MVIEW.REFRESH directly as APP_RUNTIME -
+     * Oracle raises ORA-30372 because the master tables carry VPD
+     * policies. Refresh goes through the definer's-rights procedure
+     * refresh_reporting_views (V018), which runs exempt via APP_OWNER.
+     *
+     * NOTE 2: the refresh MUST run without a tenant context set - an
+     * active APP_CTX context breaks the refresh (ORA-01031 inside
+     * DBMS_SNAPSHOT). Clear first, refresh second, in a SINGLE block:
+     * the DataSource re-applies the request context on every borrow,
+     * so two separate statements would refresh with context set.
+     * Refresh is a cross-tenant admin operation; callers needing a
+     * context must set it again afterwards.
      */
     @Override
     public void refreshMaterializedViews() {
-        jdbcTemplate.execute("BEGIN DBMS_MVIEW.REFRESH('MV_ORDER_DAILY_SUMMARY, MV_PRODUCT_SALES_SUMMARY', 'C'); END;");
+        jdbcTemplate.execute("BEGIN pkg_tenant.clear_tenant_context; refresh_reporting_views; END;");
     }
 
 }

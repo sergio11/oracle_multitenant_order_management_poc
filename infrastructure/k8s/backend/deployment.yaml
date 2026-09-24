@@ -55,16 +55,20 @@ spec:
             limits:
               cpu: "1"
               memory: 768Mi
+          # NOTE: split availability groups (Boot 3.3). Readiness includes
+          # the DB indicator -> pod goes Unready (not restarted) on DB
+          # outage (FT-001). Liveness is app-only -> a DB outage must NOT
+          # restart the pod (restart fixes nothing and drops warmup).
           readinessProbe:
             httpGet:
-              path: /internal/health
+              path: /internal/health/readiness
               port: http
             initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 12
           livenessProbe:
             httpGet:
-              path: /internal/health
+              path: /internal/health/liveness
               port: http
             initialDelaySeconds: 40
             periodSeconds: 30

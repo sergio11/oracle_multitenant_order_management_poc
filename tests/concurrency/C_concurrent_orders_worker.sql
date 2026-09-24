@@ -23,6 +23,9 @@
 SET SERVEROUTPUT ON
 WHENEVER SQLERROR EXIT FAILURE
 
+-- Run as APP_RUNTIME: resolve unqualified names against the owner schema.
+ALTER SESSION SET CURRENT_SCHEMA = APP_OWNER;
+
 DEFINE p_worker_id     = &1
 DEFINE p_tenant_id     = &2
 DEFINE p_customer_id   = &3
@@ -30,11 +33,10 @@ DEFINE p_product_id    = &4
 DEFINE p_warehouse_id  = &5
 DEFINE p_results_table = &6
 
--- VPD tenant context is required before any tenant-aware DML (SRS 52)
-BEGIN
-    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', '&p_tenant_id');
-END;
-/
+-- VPD tenant context is required before any tenant-aware DML (SRS 52).
+-- NOTE: direct DBMS_SESSION.SET_CONTEXT is forbidden outside the
+-- designated package (ORA-01031) - use the pkg_tenant API.
+EXEC pkg_tenant.set_tenant_context(&p_tenant_id);
 
 DECLARE
     v_order_id  NUMBER;
@@ -65,12 +67,16 @@ BEGIN
     DBMS_OUTPUT.PUT_LINE('Worker &&p_worker_id -> ' || v_result ||
                          ' order_id=' || v_order_id);
 EXCEPTION
+    -- NOTE: SQLERRM/SQLCODE are PL/SQL-only builtins: using them directly
+    -- inside a SQL statement (e.g. INSERT ... VALUES (SQLERRM)) raises
+    -- ORA-00984. Assign to a variable first (same pattern as above).
     WHEN OTHERS THEN
         ROLLBACK;
+        v_err_msg := SQLERRM;
         INSERT INTO &p_results_table (worker_id, order_id, result, error_msg, ts)
-        VALUES (&p_worker_id, NULL, 'ERROR', SQLERRM, SYSTIMESTAMP);
+        VALUES (&p_worker_id, NULL, 'ERROR', v_err_msg, SYSTIMESTAMP);
         COMMIT;
-        DBMS_OUTPUT.PUT_LINE('Worker &&p_worker_id -> ERROR: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('Worker &&p_worker_id -> ERROR: ' || v_err_msg);
         RAISE;
 END;
 /

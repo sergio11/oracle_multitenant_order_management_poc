@@ -33,6 +33,7 @@ require 'English'
 require 'fileutils'
 require 'json'
 require 'shellwords'
+require 'timeout'
 
 ROOT        = __dir__
 K8S_DIR     = File.join(ROOT, 'infrastructure', 'k8s')
@@ -256,12 +257,59 @@ def sqlplus_available?
   which?('sqlplus')
 end
 
+# Pod name of the Oracle StatefulSet (single replica).
+def oracle_pod!
+  pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE, '-l', 'app=oracle',
+                 '-o', 'jsonpath={.items[0].metadata.name}').strip
+  abort 'Oracle pod not found' if pod.empty?
+
+  pod
+end
+
+# Copy a local file into the Oracle pod (relative source avoids the
+# Windows drive-letter misparsing of `kubectl cp`).
+def cp_to_pod!(local_path, remote_path)
+  run!('kubectl', 'cp', File.basename(local_path),
+       "#{NAMESPACE}/#{oracle_pod!}:#{remote_path}",
+       chdir: File.dirname(local_path))
+end
+
+# Pipe SQL text through the in-pod sqlplus, print output, fail loudly on
+# error exit codes AND on ORA-/SP2-/PLS- markers (sqlplus exit codes alone
+# are unreliable - a failed script can still exit 0). Returns stdout.
+def sql_via_pod!(stdin_text, user, pass, label)
+  conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
+  cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, oracle_pod!,
+         '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)}"]
+  puts "\n$ #{cmd.join(' ')}  # via in-pod sqlplus (#{label})"
+  out = IO.popen(cmd, 'r+') do |io|
+    io.write(stdin_text)
+    io.close_write
+    io.read
+  end
+  puts out unless out.strip.empty?
+  raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
+
+  bad = out.lines.grep(/ORA-\d{5}|SP2-\d{4}|PLS-\d{5}/)
+  raise "SQL failed (#{label}): #{bad.first.strip}" unless bad.empty?
+
+  out
+end
+
+# Run a script already copied into the pod with positional &1..&n args.
+def exec_sql_file_in_pod!(remote_script, script_args, user, pass, label)
+  args = script_args.map(&:to_s).join(' ')
+  sql_via_pod!("WHENEVER SQLERROR EXIT SQL.SQLCODE\n@#{remote_script} #{args}\nEXIT SUCCESS\n",
+               user, pass, label)
+end
+
 # Run a SQL script as APP_OWNER against the Oracle NodePort using sqlplus.
 # Falls back to an in-pod sqlplus via kubectl exec when no local client exists.
-def run_sql_as_owner!(script_path_or_stdin, label:)
+# Pass db_user:/db_password: to run as another schema user (e.g. APP_RUNTIME).
+def run_sql_as_owner!(script_path_or_stdin, label:, db_user: nil, db_password: nil)
   env = load_env_file
-  user = env['APP_OWNER_USER']
-  pass = env['APP_OWNER_PWD']
+  user = db_user || env['APP_OWNER_USER']
+  pass = db_password || env['APP_OWNER_PWD']
   connect = "#{user}/#{pass}@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
 
   # NOTE: sqlplus exit codes are unreliable (a failed script can still exit
@@ -304,26 +352,8 @@ def run_sql_as_owner!(script_path_or_stdin, label:)
       #{input}
       EXIT SUCCESS
     SQL
-    # gvenzl image exposes sqlplus for OS-auth / app users via tnsping alias
-    conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
-    pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE, '-l', 'app=oracle',
-                   '-o', 'jsonpath={.items[0].metadata.name}').strip
-    abort 'Oracle pod not found' if pod.empty?
-
-    cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, pod,
-           '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)}"]
-    puts "\n$ #{cmd.join(' ')}  # via in-pod sqlplus (#{label})"
-    out = IO.popen(cmd, 'r+') do |io|
-      io.write(wrapper)
-      io.close_write
-      io.read
-    end
-    # Always show output BEFORE checking status - otherwise the actual
-    # Oracle error is swallowed when the exit code is the only signal.
-    show_output.call(out)
-    raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
-
-    check_output.call(out)
+    # gvenzl image exposes sqlplus for OS-auth / app users (no NodePort needed).
+    sql_via_pod!(wrapper, user, pass, label)
   end
 end
 
@@ -342,16 +372,12 @@ def run_packages_deploy!
   else
     conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
     # NOTE: kubectl cp needs a POD name (statefulset/x is not accepted).
-    pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE, '-l', 'app=oracle',
-                   '-o', 'jsonpath={.items[0].metadata.name}').strip
-    abort 'Oracle pod not found' if pod.empty?
+    pod = oracle_pod!
 
     # Copy package sources into the pod, then run deploy from that dir.
     run!('kubectl', 'exec', '-n', NAMESPACE, pod, '--', 'mkdir', '-p', '/tmp/packages')
-    # NOTE: relative source names - kubectl cp misparses Windows drive
-    # letters (C:/...) as remote filespecs.
     Dir.children(packages_dir).select { |f| f.end_with?('.sql') }.each do |f|
-      run!('kubectl', 'cp', f, "#{NAMESPACE}/#{pod}:/tmp/packages/#{f}", chdir: packages_dir)
+      cp_to_pod!(File.join(packages_dir, f), "/tmp/packages/#{f}")
     end
     script = <<~SH
       set -euo pipefail
@@ -448,8 +474,11 @@ namespace :qa do
     ensure_cluster!
     puts 'Waiting for Oracle (first boot can take several minutes)...'
     wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
-    puts "\nWaiting for backend..."
-    wait_for!("backend ready (#{NAMESPACE})", 180) { backend_ready? }
+    # NOTE: rollout status, not just readyReplicas - during a rolling
+    # update the OLD pod stays Ready and replica counts lie, routing
+    # smoke tests to stale code.
+    puts "\nWaiting for backend rollout..."
+    run!('kubectl', 'rollout', 'status', 'deploy/backend', '-n', NAMESPACE, '--timeout=300s')
     puts "\nAll workloads ready."
   end
 
@@ -513,6 +542,113 @@ namespace :qa do
 
     desc 'migrate + packages + seed (in order)'
     task :init => ['qa:db:migrate', 'qa:db:packages', 'qa:db:seed']
+
+    desc 'Concurrency FT-003: WORKERS racers on stock=1, exactly 1 CONFIRMED (QA_WORKERS, default 10)'
+    task :concurrency do
+      ensure_cluster!
+      env = load_env_file
+      workers = (ENV['QA_WORKERS'] || 10).to_i
+      ouser = env['APP_OWNER_USER']
+      opass = env['APP_OWNER_PWD']
+      ruser = env['APP_RUNTIME_USER']
+      rpass = env['APP_RUNTIME_PWD']
+      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+
+      conc_dir = File.join(ROOT, 'tests', 'concurrency')
+      %w[C_setup_stock.sql C_concurrent_orders_worker.sql C_assert_results.sql].each do |f|
+        cp_to_pod!(File.join(conc_dir, f), "/tmp/#{f}")
+      end
+
+      # Seed IDs by business code (identity columns are not deterministic).
+      lookup = <<~SQL
+        SET SERVEROUTPUT ON HEADING OFF FEEDBACK OFF PAGESIZE 0
+        ALTER SESSION SET CURRENT_SCHEMA = APP_OWNER;
+        DECLARE
+          v_t NUMBER; v_c NUMBER; v_p NUMBER; v_w NUMBER;
+        BEGIN
+          SELECT tenant_id INTO v_t FROM tenant WHERE tenant_code='ACME';
+          pkg_tenant.set_tenant_context(v_t);
+          SELECT customer_id INTO v_c FROM customer WHERE tenant_id=v_t AND customer_number='C0001';
+          SELECT product_id INTO v_p FROM product WHERE tenant_id=v_t AND sku='PRD-001';
+          SELECT warehouse_id INTO v_w FROM warehouse WHERE tenant_id=v_t AND code='WH1';
+          DBMS_OUTPUT.PUT_LINE('IDS:'||v_t||':'||v_c||':'||v_p||':'||v_w);
+        END;
+        /
+      SQL
+      out = sql_via_pod!("WHENEVER SQLERROR EXIT SQL.SQLCODE\n#{lookup}\nEXIT SUCCESS\n",
+                         ouser, opass, 'resolve-ids')
+      ids = out[/IDS:(\d+:\d+:\d+:\d+)/, 1]
+      abort 'Could not resolve ACME seed IDs' unless ids
+
+      tenant_id, customer_id, product_id, warehouse_id = ids.split(':')
+      puts "Seed IDs: tenant=#{tenant_id} customer=#{customer_id} " \
+           "product=#{product_id} warehouse=#{warehouse_id}"
+      tbl = "concurrency_results_#{Time.now.to_i}"
+      begin
+        sql_via_pod!(<<~SQL, ouser, opass, 'results-table')
+          WHENEVER SQLERROR EXIT SQL.SQLCODE
+          CREATE TABLE #{tbl} (worker_id NUMBER, order_id NUMBER, result VARCHAR2(30), error_msg VARCHAR2(4000), ts TIMESTAMP);
+          GRANT SELECT, INSERT ON #{tbl} TO #{ruser};
+          EXIT SUCCESS
+        SQL
+        exec_sql_file_in_pod!('/tmp/C_setup_stock.sql',
+                              [tenant_id, product_id, warehouse_id, 1],
+                              ruser, rpass, 'setup-stock')
+
+        puts "Launching #{workers} workers..."
+        results = Array.new(workers)
+        threads = (1..workers).map do |wid|
+          Thread.new do
+            begin
+              o = exec_sql_file_in_pod!('/tmp/C_concurrent_orders_worker.sql',
+                                        [wid, tenant_id, customer_id, product_id, warehouse_id, tbl],
+                                        ruser, rpass, "worker-#{wid}")
+              results[wid - 1] = { ok: true, out: o }
+            rescue StandardError => e
+              results[wid - 1] = { ok: false, out: e.message }
+            end
+          end
+        end
+        Timeout.timeout(600) { threads.each(&:join) }
+        bad = results.each_index.select { |i| !results[i] || !results[i][:ok] }
+        unless bad.empty?
+          bad.each { |i| puts "worker #{i + 1} exited non-zero: #{results[i] ? results[i][:out] : 'no result'}" }
+          puts 'Continuing to count-check + assert (a crashed worker leaves no row).'
+        end
+        puts 'All workers finished.'
+
+        # Every worker must have recorded exactly one row (ERROR rows count:
+        # C_assert_results judges business outcome, this judges completeness).
+        cnt_out = sql_via_pod!(<<~SQL, ouser, opass, 'count-workers')
+          WHENEVER SQLERROR EXIT SQL.SQLCODE
+          SET HEADING OFF FEEDBACK OFF PAGESIZE 0
+          SELECT COUNT(*) FROM #{tbl};
+          EXIT SUCCESS
+        SQL
+        recorded = cnt_out.lines.map(&:strip).select { |l| l =~ /^\d+$/ }.last.to_i
+        puts "Workers recorded: #{recorded}/#{workers}"
+        abort "Concurrency incomplete: #{recorded}/#{workers} workers recorded" unless recorded == workers
+
+        exec_sql_file_in_pod!('/tmp/C_assert_results.sql', [tbl], ouser, opass, 'assert')
+        puts 'CONCURRENCY ASSERTIONS PASSED.'
+      ensure
+        # Always restore stock (seed MERGEs never replenish) + drop results.
+        if defined?(tenant_id) && tenant_id && defined?(tbl) && tbl
+          begin
+            exec_sql_file_in_pod!('/tmp/C_setup_stock.sql',
+                                  [tenant_id, product_id, warehouse_id, 100],
+                                  ruser, rpass, 'restore-stock')
+          rescue StandardError => e
+            warn "WARNING: stock restore failed: #{e.message}"
+          end
+          begin
+            sql_via_pod!("DROP TABLE #{tbl} PURGE;\nEXIT SUCCESS\n", ouser, opass, 'cleanup-table')
+          rescue StandardError => e
+            warn "WARNING: results table cleanup failed: #{e.message}"
+          end
+        end
+      end
+    end
   end
 
   desc 'QA smoke tests: health, auth, order flow, idempotency, tenant isolation'
@@ -607,6 +743,17 @@ namespace :qa do
       check.call('GET reports (GLOBEX tenant)', res.code.to_i != 500, "HTTP #{res.code}")
     rescue StandardError => e
       check.call('GET reports (GLOBEX tenant)', false, e.message)
+    end
+
+    # 5b) MV refresh (ADMIN only) - exercises refresh_reporting_views (V018)
+    begin
+      res = http_post("#{BACKEND_URL}/api/v1/reports/refresh", '{}',
+                      user: admin,
+                      headers: { 'X-Tenant-ID' => 'ACME' })
+      check.call('POST /reports/refresh (admin)', res.code.to_i.between?(200, 299),
+                 "HTTP #{res.code} #{res.body}")
+    rescue StandardError => e
+      check.call('POST /reports/refresh (admin)', false, e.message)
     end
 
     # 6) Admin-only endpoint rejects operator

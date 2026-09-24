@@ -14,6 +14,10 @@
 SET SERVEROUTPUT ON
 WHENEVER SQLERROR EXIT FAILURE
 
+-- Run as APP_RUNTIME: resolve unqualified names (tables, packages)
+-- against the owner schema (no synonyms exist by design).
+ALTER SESSION SET CURRENT_SCHEMA = APP_OWNER;
+
 PROMPT === SECURITY: cross-tenant isolation (VPD) ===
 
 -- Switch to tenant 1 and count its customers
@@ -81,12 +85,17 @@ END;
 -- INSERT without tenant context must fail (VPD predicate 1=0 with
 -- update_check => TRUE -> ORA-28104, or ORA-01031 if the direct INSERT
 -- privilege is missing; both are acceptable rejections here).
+-- NOTE: dynamic SQL on purpose - with static SQL a missing INSERT
+-- privilege is a COMPILE-time error (ORA-06550+01031) that the block's
+-- own handler cannot catch; via EXECUTE IMMEDIATE it becomes a
+-- runtime error the handler sees.
 DECLARE
     v_inserted BOOLEAN := FALSE;
 BEGIN
     BEGIN
-        INSERT INTO customer (tenant_id, customer_number, first_name, last_name, email, status)
-        VALUES (1, 'VPD-NOCtx-TEST', 'No', 'Context', 'vpd-noctx-test@example.com', 'ACTIVE');
+        EXECUTE IMMEDIATE
+            'INSERT INTO customer (tenant_id, customer_number, first_name, last_name, email, status)'
+            || ' VALUES (1, ''VPD-NOCtx-TEST'', ''No'', ''Context'', ''vpd-noctx-test@example.com'', ''ACTIVE'')';
         v_inserted := TRUE;
     EXCEPTION
         WHEN OTHERS THEN

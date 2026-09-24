@@ -25,8 +25,10 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Public endpoints
-                .requestMatchers("/actuator/health", "/internal/health").permitAll()
+                // Public endpoints (health groups liveness/readiness included:
+                // K8s probes poll /internal/health/liveness and /readiness)
+                .requestMatchers("/actuator/health", "/actuator/health/**",
+                        "/internal/health", "/internal/health/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/v1/tenants").hasRole("ADMIN")
                 // Order operations require ORDER_OPERATOR role
                 .requestMatchers("/api/v1/orders/**").hasRole("ORDER_OPERATOR")

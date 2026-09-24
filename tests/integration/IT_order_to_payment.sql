@@ -15,71 +15,81 @@
 SET SERVEROUTPUT ON
 WHENEVER SQLERROR EXIT FAILURE
 
-DEFINE p_tenant_id   = 1
-DEFINE p_customer_id = 1
-DEFINE p_product_id  = 1
-DEFINE p_warehouse_id = 1
+-- Run as APP_RUNTIME: resolve unqualified names (tables, packages)
+-- against the owner schema (no synonyms exist by design).
+ALTER SESSION SET CURRENT_SCHEMA = APP_OWNER;
+
+-- Resolve seed IDs dynamically: identity columns are NOT deterministic
+-- (e.g. ACME is not necessarily tenant 1), so look up by business code.
+-- TENANT has no VPD policy, so it resolves without context; everything
+-- else needs the context set first (fail-closed 1=0 otherwise).
+COLUMN v_tenant_id NEW_VALUE p_tenant_id
+SELECT tenant_id AS v_tenant_id FROM tenant WHERE tenant_code = 'ACME';
 
 PROMPT === IT: order-to-payment flow for tenant &&p_tenant_id ===
 
 -- 0) Set the VPD tenant context for this session (SRS 52/14).
 --    Without it every tenant-aware query returns 0 rows (fail-closed).
-BEGIN
-    DBMS_SESSION.SET_CONTEXT('APP_CTX', 'TENANT_ID', '&p_tenant_id');
-END;
-/
+--    NOTE: direct DBMS_SESSION.SET_CONTEXT is forbidden outside the
+--    designated package (ORA-01031) - use the pkg_tenant API.
+EXEC pkg_tenant.set_tenant_context(&p_tenant_id);
+
+COLUMN v_customer_id NEW_VALUE p_customer_id
+SELECT customer_id AS v_customer_id FROM customer
+ WHERE tenant_id = &p_tenant_id AND customer_number = 'C0001';
+COLUMN v_product_id NEW_VALUE p_product_id
+SELECT product_id AS v_product_id FROM product
+ WHERE tenant_id = &p_tenant_id AND sku = 'PRD-001';
+COLUMN v_warehouse_id NEW_VALUE p_warehouse_id
+SELECT warehouse_id AS v_warehouse_id FROM warehouse
+ WHERE tenant_id = &p_tenant_id AND code = 'WH1';
+COLUMN v_unit_price NEW_VALUE p_unit_price
+SELECT unit_price AS v_unit_price FROM product WHERE product_id = &p_product_id;
 
 -- 1) Create order (DRAFT)
 VARIABLE v_order_id NUMBER;
 EXEC :v_order_id := pkg_order_management.create_order(&p_tenant_id, &p_customer_id, 'USD');
-DBMS_OUTPUT.PUT_LINE('Created order_id=' || :v_order_id);
+EXEC DBMS_OUTPUT.PUT_LINE('Created order_id=' || :v_order_id);
 
--- 2) Add a line (seed product PRD-001 @ 25.00 -> total 50.00)
+-- 2) Add a line (qty=2 of PRD-001 -> total = 2 x unit_price)
 EXEC pkg_order_management.add_order_line(&p_tenant_id, :v_order_id, &p_product_id, 2, &p_warehouse_id);
-DBMS_OUTPUT.PUT_LINE('Added line: qty=2 product_id=' || &p_product_id);
+EXEC DBMS_OUTPUT.PUT_LINE('Added line: qty=2 product_id=' || &p_product_id);
 
 -- 3) Confirm order (reserves inventory + audit + outbox)
 EXEC pkg_order_management.confirm_order(&p_tenant_id, :v_order_id, 'TEST_USER', 'IT-' || SYS_GUID());
-DBMS_OUTPUT.PUT_LINE('Order confirmed (status should be CONFIRMED)');
+EXEC DBMS_OUTPUT.PUT_LINE('Order confirmed (status should be CONFIRMED)');
 
 -- 4) Register payment (amount must equal the order total)
-EXEC pkg_order_management.register_payment(&p_tenant_id, :v_order_id, 'PAY-' || :v_order_id, 50.00, 'USD', 'CARD', 'TEST_USER', 'IT-' || SYS_GUID());
-DBMS_OUTPUT.PUT_LINE('Payment registered');
+EXEC pkg_order_management.register_payment(&p_tenant_id, :v_order_id, 'PAY-' || :v_order_id, 2*&p_unit_price, 'USD', 'CARD', 'TEST_USER', 'IT-' || SYS_GUID());
+EXEC DBMS_OUTPUT.PUT_LINE('Payment registered');
 
--- 5) Refresh MVs (may lack privileges as APP_RUNTIME) and assert.
---    The refresh failure is reported clearly and the MV assertion is
---    skipped in that case instead of failing with a misleading error.
+-- 5) Refresh MVs via the definer's-rights procedure (V018) and assert.
+--    Direct DBMS_MVIEW.REFRESH as APP_RUNTIME raises ORA-30372 (VPD on
+--    master tables); refresh_reporting_views runs exempt via APP_OWNER.
+--    The refresh must run WITHOUT tenant context (an active context
+--    breaks it with ORA-01031); clear first in the SAME block, then
+--    set the context again for the tenant-scoped asserts below.
+BEGIN
+    pkg_tenant.clear_tenant_context;
+    refresh_reporting_views;
+END;
+/
+EXEC pkg_tenant.set_tenant_context(&p_tenant_id);
 DECLARE
-    v_refreshed BOOLEAN := TRUE;
     v_revenue   NUMBER;
     v_orders    NUMBER;
 BEGIN
-    BEGIN
-        DBMS_MVIEW.REFRESH('MV_PRODUCT_SALES_SUMMARY', 'C');
-        DBMS_MVIEW.REFRESH('MV_ORDER_DAILY_SUMMARY', 'C');
-    EXCEPTION
-        WHEN OTHERS THEN
-            v_refreshed := FALSE;
-            DBMS_OUTPUT.PUT_LINE('WARNING: MV refresh failed: ' || SQLERRM);
-            DBMS_OUTPUT.PUT_LINE('APP_RUNTIME usually lacks MVIEW refresh privileges.');
-            DBMS_OUTPUT.PUT_LINE('Refresh as APP_OWNER (DBMS_MVIEW.REFRESH) and re-run to assert the MVs.');
-    END;
+    DBMS_OUTPUT.PUT_LINE('Materialized views refreshed');
 
-    IF v_refreshed THEN
-        DBMS_OUTPUT.PUT_LINE('Materialized views refreshed');
+    SELECT NVL(SUM(total_revenue), 0), NVL(SUM(order_count), 0)
+      INTO v_revenue, v_orders
+      FROM mv_order_daily_summary
+     WHERE tenant_id = &p_tenant_id;
 
-        SELECT NVL(SUM(total_revenue), 0), NVL(SUM(order_count), 0)
-          INTO v_revenue, v_orders
-          FROM mv_order_daily_summary
-         WHERE tenant_id = &p_tenant_id;
-
-        IF v_revenue <= 0 OR v_orders < 1 THEN
-            RAISE_APPLICATION_ERROR(-20901, 'MV did not reflect order: revenue=' || v_revenue || ' orders=' || v_orders);
-        END IF;
-        DBMS_OUTPUT.PUT_LINE('MV assertion OK: revenue=' || v_revenue || ' orders=' || v_orders);
-    ELSE
-        DBMS_OUTPUT.PUT_LINE('MV assertion SKIPPED (refresh unavailable).');
+    IF v_revenue <= 0 OR v_orders < 1 THEN
+        RAISE_APPLICATION_ERROR(-20901, 'MV did not reflect order: revenue=' || v_revenue || ' orders=' || v_orders);
     END IF;
+    DBMS_OUTPUT.PUT_LINE('MV assertion OK: revenue=' || v_revenue || ' orders=' || v_orders);
 END;
 /
 

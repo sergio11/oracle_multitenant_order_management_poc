@@ -59,6 +59,12 @@ GRANT CREATE TABLE, CREATE VIEW, CREATE PROCEDURE, CREATE SEQUENCE,
 -- Privileges required for multi-tenancy isolation (SRS 14, VPD/DBMS_RLS)
 GRANT EXECUTE ON SYS.DBMS_RLS TO app_owner;
 GRANT CREATE ANY CONTEXT TO app_owner;
+-- Reporting MVs sit on VPD-protected master tables: Oracle forbids
+-- DBMS_MVIEW.REFRESH there (ORA-30372) except for sessions holding
+-- EXEMPT ACCESS POLICY. APP_OWNER holds it so the definer's-rights
+-- refresh_reporting_views procedure (V018) can refresh; APP_RUNTIME
+-- must NEVER hold it (it would bypass tenant isolation on all reads).
+GRANT EXEMPT ACCESS POLICY TO app_owner;
 -- Object grants (tables/MVs/sequences) and package EXECUTE grants are
 -- applied AFTER schema creation by Flyway migration
 -- V017__runtime_grants.sql (and deploy_packages.sql for pkg_*).

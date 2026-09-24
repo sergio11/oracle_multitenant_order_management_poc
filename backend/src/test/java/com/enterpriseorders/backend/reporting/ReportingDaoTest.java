@@ -62,6 +62,6 @@ class ReportingDaoTest {
     @Test
     void shouldRefreshMaterializedViews() {
         reportingDao.refreshMaterializedViews();
-        verify(jdbcTemplate).execute(contains("DBMS_MVIEW.REFRESH"));
+        verify(jdbcTemplate).execute(contains("refresh_reporting_views"));
     }
 }
