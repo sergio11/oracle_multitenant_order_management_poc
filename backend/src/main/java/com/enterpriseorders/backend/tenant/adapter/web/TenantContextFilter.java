@@ -3,8 +3,9 @@ package com.enterpriseorders.backend.tenant.adapter.web;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
-import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
+import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import com.enterpriseorders.backend.web.error.ApiError;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.web.filter.CorrelationFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
@@ -15,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -41,8 +43,8 @@ import java.io.IOException;
  *       try/finally so stale state can never leak across requests.</li>
  *   <li>H4: depends on ports (ResolveTenantUseCase, TenantContextHolder),
  *       never on TenantRepository or the concrete TenantContext.</li>
- *   <li>C4: non-admin principals are bound to tenants via UserTenancy;
- *       ROLE_ADMIN may access any tenant.</li>
+ *   <li>C4: non-admin principals are bound to tenants via RoleTenancy
+ *       (role-level allowlist); ROLE_ADMIN may access any tenant.</li>
  *   <li>L5: raw header values are never echoed in bodies; logged truncated
  *       to 30 chars at WARN.</li>
  *   <li>M2: error bodies carry the correlation id MDC-first, header fallback.</li>
@@ -66,16 +68,16 @@ public class TenantContextFilter extends OncePerRequestFilter {
 
     private final ResolveTenantUseCase resolveTenantUseCase;
     private final TenantContextHolder tenantContextHolder;
-    private final UserTenancy userTenancy;
+    private final RoleTenancy roleTenancy;
     private final ObjectMapper objectMapper;
 
     public TenantContextFilter(ResolveTenantUseCase resolveTenantUseCase,
                                TenantContextHolder tenantContextHolder,
-                               UserTenancy userTenancy,
+                               RoleTenancy roleTenancy,
                                ObjectMapper objectMapper) {
         this.resolveTenantUseCase = resolveTenantUseCase;
         this.tenantContextHolder = tenantContextHolder;
-        this.userTenancy = userTenancy;
+        this.roleTenancy = roleTenancy;
         this.objectMapper = objectMapper;
     }
 
@@ -114,20 +116,26 @@ public class TenantContextFilter extends OncePerRequestFilter {
                         "TENANT_REQUIRED", "Missing X-Tenant-ID header");
                 return;
             }
-            String tenantCode = rawHeader.trim();
+            // Normalize once: the role allowlist and the DB lookup both
+            // match on trimmed upper-case codes, so 'acme' must behave
+            // exactly like 'ACME' at every downstream check.
+            String tenantCode = rawHeader.trim().toUpperCase();
 
             // C4: bind the tenant to the authenticated principal. The
             // security chain runs first, so a missing Authentication here
-            // means unauthenticated.
+            // means unauthenticated. AnonymousAuthenticationToken reports
+            // isAuthenticated() == true, so it must be rejected explicitly.
             Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-            if (authentication == null || !authentication.isAuthenticated() || authentication.getName() == null) {
+            if (authentication == null || !authentication.isAuthenticated()
+                    || authentication instanceof AnonymousAuthenticationToken
+                    || authentication.getName() == null) {
                 writeError(request, response, HttpServletResponse.SC_UNAUTHORIZED,
                         "UNAUTHORIZED", "Authentication required");
                 return;
             }
             boolean isAdmin = authentication.getAuthorities().stream()
                     .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
-            if (!isAdmin && !userTenancy.isAllowed(authentication.getName(), tenantCode)) {
+            if (!isAdmin && !roleTenancy.isAllowed(tenantCode)) {
                 log.warn("Tenant access denied (user={}, tenant={})",
                         authentication.getName(), truncate(tenantCode));
                 writeError(request, response, HttpServletResponse.SC_FORBIDDEN,
@@ -140,7 +148,8 @@ public class TenantContextFilter extends OncePerRequestFilter {
                 tenantId = resolveTenantUseCase.resolveActiveTenantId(tenantCode);
             } catch (BusinessException e) {
                 log.warn("Unknown or inactive tenant (tenant={})", truncate(tenantCode));
-                writeError(request, response, e.getHttpStatus(), e.getCode(), e.getMessage());
+                writeError(request, response,
+                        GlobalExceptionHandler.statusFor(e.getCode()).value(), e.getCode(), e.getMessage());
                 return;
             } catch (Exception e) {
                 log.error("Tenant resolution failed", e);

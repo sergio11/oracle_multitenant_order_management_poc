@@ -2,7 +2,7 @@ package com.enterpriseorders.backend.tenant;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.application.TenantService;
-import com.enterpriseorders.backend.tenant.model.NewTenant;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;import com.enterpriseorders.backend.tenant.model.NewTenant;
 import com.enterpriseorders.backend.tenant.model.TenantView;
 import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import org.junit.jupiter.api.Test;
@@ -46,11 +46,13 @@ class TenantServiceTest {
     }
 
     @Test
-    void shouldThrowTenantNotFoundWhenResolvingUnknownCode() {
+    void shouldThrowTenantAccessDeniedWhenResolvingUnknownCode() {
         when(tenantRepository.findActiveTenantIdByCode("UNKNOWN")).thenReturn(Optional.empty());
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> tenantService.resolveActiveTenantId("UNKNOWN"));
-        assertEquals("TENANT_NOT_FOUND", ex.getCode());
-        assertEquals(401, ex.getHttpStatus());
+        // Anti-enumeration: the resolution path must not reveal whether a
+        // code exists (401), unlike the persistence 404 for absent records.
+        assertEquals("TENANT_ACCESS_DENIED", ex.getCode());
+        assertEquals(401, GlobalExceptionHandler.statusFor(ex.getCode()).value());
     }
 }

@@ -24,6 +24,7 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -41,11 +42,67 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    /**
+     * Single error-code to HTTP-status table for the whole API (Protected
+     * Variations: transport decisions live only in this driving adapter, so
+     * the application and persistence layers never import HTTP types).
+     * Unknown codes degrade to 500 rather than leaking a misleading 4xx.
+     *
+     * <p>Deliberate split: {@code TENANT_NOT_FOUND} (404, the record does not
+     * exist) vs {@code TENANT_ACCESS_DENIED} (401, anti-enumeration: the
+     * resolution path refuses to reveal whether a code exists).
+     */
+    private static final Map<String, HttpStatus> CODE_STATUS = Map.ofEntries(
+            Map.entry("TENANT_ALREADY_EXISTS", HttpStatus.CONFLICT),
+            Map.entry("INVALID_TIER", HttpStatus.BAD_REQUEST),
+            Map.entry("INVALID_ISOLATION_MODE", HttpStatus.BAD_REQUEST),
+            Map.entry("TENANT_NOT_FOUND", HttpStatus.NOT_FOUND),
+            Map.entry("TENANT_ACCESS_DENIED", HttpStatus.UNAUTHORIZED),
+            Map.entry("INVALID_QUANTITY", HttpStatus.BAD_REQUEST),
+            Map.entry("INSUFFICIENT_INVENTORY", HttpStatus.BAD_REQUEST),
+            Map.entry("INVENTORY_NOT_FOUND", HttpStatus.NOT_FOUND),
+            Map.entry("INVENTORY_NOT_FOUND_TEST", HttpStatus.NOT_FOUND),
+            Map.entry("INVALID_RELEASE_QUANTITY", HttpStatus.BAD_REQUEST),
+            Map.entry("INSUFFICIENT_RESERVED", HttpStatus.BAD_REQUEST),
+            Map.entry("TENANT_SUSPENDED", HttpStatus.BAD_REQUEST),
+            Map.entry("CUSTOMER_TENANT_MISMATCH", HttpStatus.BAD_REQUEST),
+            Map.entry("PRODUCT_TENANT_MISMATCH", HttpStatus.BAD_REQUEST),
+            Map.entry("ORDER_NOT_FOUND", HttpStatus.NOT_FOUND),
+            Map.entry("ORDER_NOT_DRAFT", HttpStatus.BAD_REQUEST),
+            Map.entry("ORDER_NOT_CONFIRMABLE", HttpStatus.BAD_REQUEST),
+            Map.entry("ORDER_NO_LINES", HttpStatus.BAD_REQUEST),
+            Map.entry("ORDER_NOT_CANCELLABLE", HttpStatus.BAD_REQUEST),
+            Map.entry("ORDER_SHIPPED_NOT_CANCELLABLE", HttpStatus.CONFLICT),
+            Map.entry("CANCEL_REASON_REQUIRED", HttpStatus.BAD_REQUEST),
+            Map.entry("PAYMENT_STATE_INVALID", HttpStatus.BAD_REQUEST),
+            Map.entry("DUPLICATE_PAYMENT_REF", HttpStatus.CONFLICT),
+            Map.entry("ORDER_ALREADY_PAID", HttpStatus.CONFLICT),
+            Map.entry("PAYMENT_AMOUNT_INVALID", HttpStatus.BAD_REQUEST),
+            Map.entry("PAYMENT_CURRENCY_MISMATCH", HttpStatus.BAD_REQUEST),
+            Map.entry("PAYMENT_AMOUNT_MISMATCH", HttpStatus.BAD_REQUEST),
+            Map.entry("STATUS_TRANSITION_CONFLICT", HttpStatus.CONFLICT),
+            Map.entry("TENANT_CONTEXT_MISSING", HttpStatus.SERVICE_UNAVAILABLE),
+            Map.entry("INVALID_IDEMPOTENCY_KEY", HttpStatus.BAD_REQUEST),
+            Map.entry("IDEMPOTENCY_RACE_CONFLICT", HttpStatus.CONFLICT),
+            Map.entry("IDEMPOTENCY_IN_PROGRESS", HttpStatus.CONFLICT),
+            Map.entry("IDEMPOTENCY_PAYLOAD_MISSING", HttpStatus.INTERNAL_SERVER_ERROR),
+            Map.entry("IDEMPOTENCY_KEY_CONFLICT", HttpStatus.CONFLICT),
+            Map.entry("INVALID_LIMIT", HttpStatus.BAD_REQUEST));
+
+    /**
+     * Resolves the HTTP status for a functional error code. Public so that
+     * other driving adapters (e.g. filters writing their own error bodies)
+     * share this single table instead of duplicating it.
+     */
+    public static HttpStatus statusFor(String code) {
+        return CODE_STATUS.getOrDefault(code, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiError> handleBusiness(BusinessException ex, WebRequest request) {
         String correlationId = resolveCorrelationId(request);
         ApiError body = ApiError.of(ex.getCode(), ex.getMessage(), correlationId);
-        return ResponseEntity.status(ex.getHttpStatus()).body(body);
+        return ResponseEntity.status(statusFor(ex.getCode())).body(body);
     }
 
     @ExceptionHandler(DatabaseException.class)

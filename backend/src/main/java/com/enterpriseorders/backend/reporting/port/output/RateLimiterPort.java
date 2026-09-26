@@ -29,4 +29,11 @@ public interface RateLimiterPort {
      * See the implementation javadoc for the concurrency tradeoff.
      */
     void refund();
+
+    /**
+     * Releases a successfully used permit. Clears any thread-bound permit
+     * state so pooled worker threads never retain stale limiter state
+     * after a completed refresh.
+     */
+    void release();
 }

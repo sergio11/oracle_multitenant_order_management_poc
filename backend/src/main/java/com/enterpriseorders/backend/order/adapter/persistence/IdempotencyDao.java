@@ -54,10 +54,10 @@ public class IdempotencyDao implements IdempotencyStore {
     }
 
     @Override
-    public int markCompleted(Long tenantId, String idempotencyKey, String responsePayload) {
+    public int markCompleted(Long tenantId, String idempotencyKey, Long aggregateId, String responsePayload) {
         return jdbcTemplate.update(
-                "UPDATE idempotency_key SET status = 'COMPLETED', response_payload = ? " +
+                "UPDATE idempotency_key SET status = 'COMPLETED', aggregate_id = ?, response_payload = ? " +
                 "WHERE tenant_id = ? AND idempotency_key = ?",
-                responsePayload, tenantId, idempotencyKey);
+                aggregateId, responsePayload, tenantId, idempotencyKey);
     }
 }

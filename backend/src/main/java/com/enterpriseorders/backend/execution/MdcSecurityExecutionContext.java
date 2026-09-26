@@ -1,5 +1,6 @@
 package com.enterpriseorders.backend.execution;
 
+import com.enterpriseorders.backend.web.filter.CorrelationFilter;
 import org.slf4j.MDC;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -18,12 +19,13 @@ import org.springframework.stereotype.Component;
 @Component
 public class MdcSecurityExecutionContext implements ExecutionContext {
 
-    private static final String CORRELATION_MDC_KEY = "correlationId";
+    // Single ownership: the MDC key is defined by its producer
+    // (CorrelationFilter.MDC_KEY); this bridge only reads it.
     private static final String DEFAULT_ACTOR = "APP_JAVA";
 
     @Override
     public String correlationId() {
-        return MDC.get(CORRELATION_MDC_KEY);
+        return MDC.get(CorrelationFilter.MDC_KEY);
     }
 
     @Override

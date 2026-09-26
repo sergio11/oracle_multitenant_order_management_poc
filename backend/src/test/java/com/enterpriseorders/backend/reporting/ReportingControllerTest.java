@@ -10,7 +10,7 @@ import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummar
 import com.enterpriseorders.backend.reporting.port.output.dto.ReportsFreshness;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
-import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
+import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -37,7 +37,7 @@ class ReportingControllerTest {
     @MockBean private GetReportsFreshnessQuery getReportsFreshnessQuery;
     @MockBean private TenantContextHolder tenantContextHolder;
     @MockBean private ResolveTenantUseCase resolveTenantUseCase;
-    @MockBean private UserTenancy userTenancy;
+    @MockBean private RoleTenancy roleTenancy;
 
     private void stubFreshness() {
         when(getReportsFreshnessQuery.getReportsFreshness())

@@ -66,4 +66,15 @@ class RefreshRateLimiterTest {
         limiter.refund();
         assertTrue(limiter.tryAcquire());
     }
+
+    @Test
+    void shouldIgnoreRefundAfterRelease() {
+        // Successful path: acquire -> release clears the thread-bound permit,
+        // so a later refund (e.g. from another request on this pooled thread)
+        // is a no-op and the cooldown is preserved.
+        assertTrue(limiter.tryAcquire());
+        limiter.release();
+        limiter.refund();
+        assertFalse(limiter.tryAcquire());
+    }
 }

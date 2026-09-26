@@ -34,15 +34,6 @@ public class TenantDao implements TenantRepository {
     }
 
     @Override
-    public Optional<Long> findActiveTenantIdById(Long tenantId) {
-        return jdbcTemplate.query(
-                "SELECT tenant_id FROM tenant WHERE tenant_id = ? AND status = 'ACTIVE'",
-                rs -> rs.next() ? Optional.of(rs.getLong("tenant_id")) : Optional.empty(),
-                tenantId
-        );
-    }
-
-    @Override
     public Long create(NewTenant request) {
         return jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
@@ -68,7 +59,7 @@ public class TenantDao implements TenantRepository {
                 rs -> {
                     if (!rs.next()) {
                         throw new BusinessException("TENANT_NOT_FOUND",
-                                "Tenant not found: " + tenantId, 404);
+                                "Tenant not found: " + tenantId);
                     }
                     return new TenantView(
                             rs.getLong("tenant_id"),

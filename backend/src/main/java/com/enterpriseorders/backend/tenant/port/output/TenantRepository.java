@@ -7,7 +7,6 @@ import java.util.Optional;
 
 public interface TenantRepository {
     Optional<Long> findActiveTenantIdByCode(String tenantCode);
-    Optional<Long> findActiveTenantIdById(Long tenantId);
     Long create(NewTenant request);
     TenantView findById(Long tenantId);
 }

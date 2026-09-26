@@ -12,7 +12,6 @@ import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedView
 import com.enterpriseorders.backend.reporting.port.output.RateLimiterPort;
 import com.enterpriseorders.backend.reporting.port.output.ReportingQueryPort;
 import com.enterpriseorders.backend.reporting.port.output.RefreshMaterializedViewsPort;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,7 +44,7 @@ public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuer
     public List<ProductSalesSummary> getTopProducts(int limit) {
         if (limit < MIN_LIMIT || limit > MAX_LIMIT) {
             throw new BusinessException("INVALID_LIMIT",
-                    "limit must be between " + MIN_LIMIT + " and " + MAX_LIMIT + " (got " + limit + ")", HttpStatus.BAD_REQUEST);
+                    "limit must be between " + MIN_LIMIT + " and " + MAX_LIMIT + " (got " + limit + ")");
         }
         return reportingQueryPort.getTopProducts(limit);
     }
@@ -65,6 +64,7 @@ public class ReportingService implements GetDailyOrdersQuery, GetTopProductsQuer
         }
         try {
             refreshPort.refreshMaterializedViews();
+            rateLimiter.release();
         } catch (RuntimeException ex) {
             rateLimiter.refund();
             throw ex;

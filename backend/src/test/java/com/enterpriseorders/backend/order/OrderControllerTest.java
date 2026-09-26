@@ -6,7 +6,7 @@ import com.enterpriseorders.backend.order.model.OrderView;
 import com.enterpriseorders.backend.order.port.input.*;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
-import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
+import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,7 +35,7 @@ class OrderControllerTest {
     @MockBean private GetOrderQuery getOrderQuery;
     @MockBean private ResolveTenantUseCase resolveTenantUseCase;
     @MockBean private TenantContextHolder tenantContextHolder;
-    @MockBean private UserTenancy userTenancy;
+    @MockBean private RoleTenancy roleTenancy;
 
     private static final String BASE = "/api/v1/orders";
     private final OrderView mockOrder = new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of());
@@ -121,7 +121,7 @@ class OrderControllerTest {
     void shouldRejectCancelWithoutReason() throws Exception {
         when(cancelOrderUseCase.cancelOrder(1L, null, null))
                 .thenThrow(new BusinessException("CANCEL_REASON_REQUIRED",
-                        "Cancellation reason is required", 400));
+                        "Cancellation reason is required"));
         mockMvc.perform(post(BASE + "/1/cancel"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("CANCEL_REASON_REQUIRED"));

@@ -1,6 +1,7 @@
 package com.enterpriseorders.backend.tenant;
 
 import com.enterpriseorders.backend.exception.BusinessException;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.tenant.adapter.persistence.TenantDao;
 import com.enterpriseorders.backend.tenant.model.NewTenant;
 import com.enterpriseorders.backend.tenant.model.TenantView;
@@ -128,6 +129,6 @@ class TenantDaoTest {
                 () -> tenantDao.create(new NewTenant("ACME", "Acme Corp", "STANDARD", "SHARED_SCHEMA")));
 
         assertEquals("TENANT_ALREADY_EXISTS", ex.getCode());
-        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals(HttpStatus.CONFLICT, GlobalExceptionHandler.statusFor(ex.getCode()));
     }
 }

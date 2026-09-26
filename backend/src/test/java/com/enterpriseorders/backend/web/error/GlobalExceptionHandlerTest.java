@@ -56,11 +56,33 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldHandleBusinessException() {
-        var ex = new BusinessException("ORDER_NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND);
+        var ex = new BusinessException("ORDER_NOT_FOUND", "Order not found");
         ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertEquals("ORDER_NOT_FOUND", response.getBody().code());
         assertEquals("Order not found", response.getBody().message());
+    }
+
+    @Test
+    void shouldMapKnownCodesToDocumentedStatuses() {
+        assertEquals(HttpStatus.CONFLICT, GlobalExceptionHandler.statusFor("TENANT_ALREADY_EXISTS"));
+        assertEquals(HttpStatus.NOT_FOUND, GlobalExceptionHandler.statusFor("TENANT_NOT_FOUND"));
+        assertEquals(HttpStatus.UNAUTHORIZED, GlobalExceptionHandler.statusFor("TENANT_ACCESS_DENIED"));
+        assertEquals(HttpStatus.BAD_REQUEST, GlobalExceptionHandler.statusFor("ORDER_NOT_DRAFT"));
+        assertEquals(HttpStatus.CONFLICT, GlobalExceptionHandler.statusFor("ORDER_SHIPPED_NOT_CANCELLABLE"));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, GlobalExceptionHandler.statusFor("TENANT_CONTEXT_MISSING"));
+        assertEquals(HttpStatus.CONFLICT, GlobalExceptionHandler.statusFor("IDEMPOTENCY_KEY_CONFLICT"));
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR,
+                GlobalExceptionHandler.statusFor("IDEMPOTENCY_PAYLOAD_MISSING"));
+        assertEquals(HttpStatus.BAD_REQUEST, GlobalExceptionHandler.statusFor("INVALID_LIMIT"));
+    }
+
+    @Test
+    void shouldMapUnknownCodeToInternalServerError() {
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, GlobalExceptionHandler.statusFor("NO_SUCH_CODE"));
+        var ex = new BusinessException("NO_SUCH_CODE", "mystery");
+        ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
     }
 
     @Test
@@ -104,7 +126,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void shouldIncludeCorrelationIdWhenPresent() {
         when(request.getHeader("X-Correlation-ID")).thenReturn("corr-123");
-        var ex = new BusinessException("TEST_ERROR", "test", HttpStatus.BAD_REQUEST);
+        var ex = new BusinessException("TEST_ERROR", "test");
         ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
         assertEquals("corr-123", response.getBody().correlationId());
     }
@@ -152,7 +174,7 @@ class GlobalExceptionHandlerTest {
     void shouldFallBackToMdcCorrelationIdWhenHeaderMissing() {
         when(request.getHeader("X-Correlation-ID")).thenReturn(null);
         MDC.put("correlationId", "mdc-corr-789");
-        var ex = new BusinessException("TEST", "test", HttpStatus.BAD_REQUEST);
+        var ex = new BusinessException("TEST", "test");
         ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
         assertEquals("mdc-corr-789", response.getBody().correlationId());
     }
@@ -160,7 +182,7 @@ class GlobalExceptionHandlerTest {
     @Test
     void shouldReturnNullCorrelationIdWhenHeaderMissing() {
         when(request.getHeader("X-Correlation-ID")).thenReturn(null);
-        var ex = new BusinessException("TEST", "test", HttpStatus.BAD_REQUEST);
+        var ex = new BusinessException("TEST", "test");
         ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
         assertNull(response.getBody().correlationId());
     }
@@ -169,7 +191,7 @@ class GlobalExceptionHandlerTest {
     void shouldPreferMdcCorrelationIdOverHeader() {
         when(request.getHeader("X-Correlation-ID")).thenReturn("header-corr");
         MDC.put("correlationId", "mdc-corr");
-        var ex = new BusinessException("TEST", "test", HttpStatus.BAD_REQUEST);
+        var ex = new BusinessException("TEST", "test");
         ResponseEntity<ApiError> response = exceptionHandler.handleBusiness(ex, request);
         assertEquals("mdc-corr", response.getBody().correlationId());
     }

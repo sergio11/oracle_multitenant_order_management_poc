@@ -2,6 +2,7 @@ package com.enterpriseorders.backend.reporting;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.RefreshRateLimitException;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.reporting.application.ReportingService;
 import com.enterpriseorders.backend.reporting.port.output.RateLimiterPort;
 import com.enterpriseorders.backend.reporting.port.output.RefreshMaterializedViewsPort;
@@ -50,7 +51,7 @@ class ReportingServiceTest {
     void shouldRejectLimitBelowRange() {
         BusinessException ex = assertThrows(BusinessException.class, () -> reportingService.getTopProducts(0));
         assertEquals("INVALID_LIMIT", ex.getCode());
-        assertEquals(400, ex.getHttpStatus());
+        assertEquals(400, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(reportingQueryPort, never()).getTopProducts(anyInt());
     }
 
@@ -76,6 +77,7 @@ class ReportingServiceTest {
         when(rateLimiter.tryAcquire()).thenReturn(true);
         reportingService.refreshMaterializedViews();
         verify(refreshPort).refreshMaterializedViews();
+        verify(rateLimiter).release();
         verify(rateLimiter, never()).refund();
     }
 
@@ -96,6 +98,7 @@ class ReportingServiceTest {
         doThrow(new IllegalStateException("db down")).when(refreshPort).refreshMaterializedViews();
         assertThrows(IllegalStateException.class, () -> reportingService.refreshMaterializedViews());
         verify(rateLimiter).refund();
+        verify(rateLimiter, never()).release();
     }
 
     @Test

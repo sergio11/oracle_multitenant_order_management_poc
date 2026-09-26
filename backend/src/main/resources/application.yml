@@ -44,8 +44,9 @@ app:
     operator:
       password: ${APP_OPERATOR_PASSWORD:changeme}
     tenancy:
-      # C4: non-admin users are bound to these tenant codes (comma separated).
-      # ROLE_ADMIN may access any tenant (enforced in TenantContextFilter).
+      # C4: role-level binding - non-admin principals may enter these tenant
+      # codes (comma separated). ROLE_ADMIN may access any tenant (enforced
+      # in TenantContextFilter). Per-user mapping is out of POC scope.
       operator-allowed-tenants: ${APP_OPERATOR_TENANTS:ACME}
 
 management:

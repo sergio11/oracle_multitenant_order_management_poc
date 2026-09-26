@@ -2,6 +2,7 @@ package com.enterpriseorders.backend.order.adapter.persistence;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.DatabaseException;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.order.model.OrderView;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -123,7 +124,7 @@ class OrderDaoTest {
         BusinessException ex = assertThrows(BusinessException.class, () -> orderDao.findById(9L, 1L));
 
         assertEquals("ORDER_NOT_FOUND", ex.getCode());
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+        assertEquals(HttpStatus.NOT_FOUND, GlobalExceptionHandler.statusFor(ex.getCode()));
     }
 
     @Test
@@ -170,7 +171,7 @@ class OrderDaoTest {
         BusinessException ex = assertThrows(BusinessException.class, () -> orderDao.create(9L, 100L, "USD"));
 
         assertEquals("ORDER_NOT_FOUND", ex.getCode());
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
+        assertEquals(HttpStatus.NOT_FOUND, GlobalExceptionHandler.statusFor(ex.getCode()));
     }
 
     @Test

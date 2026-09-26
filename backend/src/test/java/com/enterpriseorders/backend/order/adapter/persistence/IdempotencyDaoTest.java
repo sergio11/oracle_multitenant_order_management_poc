@@ -83,20 +83,20 @@ class IdempotencyDaoTest {
 
     @Test
     void shouldMarkCompletedAndReturnUpdateCount() {
-        when(jdbcTemplate.update(anyString(), eq("{\"status\":\"CONFIRMED\"}"), eq(9L), eq("key-1")))
+        when(jdbcTemplate.update(anyString(), eq(7L), eq("{\"status\":\"CONFIRMED\"}"), eq(9L), eq("key-1")))
                 .thenReturn(1);
 
-        int updated = idempotencyDao.markCompleted(9L, "key-1", "{\"status\":\"CONFIRMED\"}");
+        int updated = idempotencyDao.markCompleted(9L, "key-1", 7L, "{\"status\":\"CONFIRMED\"}");
 
         assertEquals(1, updated);
-        verify(jdbcTemplate).update(contains("COMPLETED"), eq("{\"status\":\"CONFIRMED\"}"),
+        verify(jdbcTemplate).update(contains("COMPLETED"), eq(7L), eq("{\"status\":\"CONFIRMED\"}"),
                 eq(9L), eq("key-1"));
     }
 
     @Test
     void shouldReturnZeroWhenMarkCompletedMatchesNothing() {
-        when(jdbcTemplate.update(anyString(), any(), any(), any())).thenReturn(0);
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any())).thenReturn(0);
 
-        assertEquals(0, idempotencyDao.markCompleted(9L, "key-1", "{}"));
+        assertEquals(0, idempotencyDao.markCompleted(9L, "key-1", 7L, "{}"));
     }
 }

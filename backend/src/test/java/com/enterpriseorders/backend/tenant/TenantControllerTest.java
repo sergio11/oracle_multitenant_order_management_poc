@@ -6,7 +6,7 @@ import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
-import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
+import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,7 +28,7 @@ class TenantControllerTest {
     @MockBean private GetTenantQuery getTenantQuery;
     @MockBean private ResolveTenantUseCase resolveTenantUseCase;
     @MockBean private TenantContextHolder tenantContextHolder;
-    @MockBean private UserTenancy userTenancy;
+    @MockBean private RoleTenancy roleTenancy;
 
     private static final String BASE = "/api/v1/tenants";
     private final TenantView mockTenant = new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA");

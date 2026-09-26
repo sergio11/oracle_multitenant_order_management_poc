@@ -26,6 +26,8 @@ public class RefreshRateLimiter implements RateLimiterPort {
     /**
      * Timestamp written by the last successful {@link #tryAcquire()} on this
      * thread; used by {@link #refund()} to roll back exactly its own permit.
+     * Cleared by both {@link #refund()} and {@link #release()}, so a pooled
+     * worker thread never retains it after the request completes.
      */
     private final ThreadLocal<Long> heldPermit = new ThreadLocal<>();
 
@@ -80,5 +82,10 @@ public class RefreshRateLimiter implements RateLimiterPort {
             return;
         }
         lastRefreshTime.compareAndSet(held, held - cooldownMs);
+    }
+
+    @Override
+    public void release() {
+        heldPermit.remove();
     }
 }

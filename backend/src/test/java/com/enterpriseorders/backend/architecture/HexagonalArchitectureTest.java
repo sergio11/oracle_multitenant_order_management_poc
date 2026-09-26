@@ -54,9 +54,11 @@ class HexagonalArchitectureTest {
 
     // 3. Application stays free of container/JDBC APIs: none of OrderService,
     // TenantService, ReportingService or IdempotentOperationExecutor imports
-    // org.springframework.jdbc or jakarta.servlet (they use only stereotype,
-    // @Transactional and HttpStatus from Spring). Jackson is deliberately NOT
-    // banned here — the executor's JSON payload codec needs it.
+    // org.springframework.jdbc or jakarta.servlet (they use only stereotype
+    // and @Transactional from Spring). Transport mapping (HTTP statuses)
+    // lives in GlobalExceptionHandler, never in application or persistence.
+    // Jackson is deliberately NOT banned here — the executor's JSON payload
+    // codec needs it.
     @ArchTest
     static final ArchRule applicationDoesNotTouchContainerApis = noClasses()
             .that().resideInAPackage("..application..")
@@ -120,6 +122,38 @@ class HexagonalArchitectureTest {
             .that().resideInAPackage("..adapter.persistence..")
             .should().dependOnClassesThat()
             .resideInAnyPackage("..adapter.web..", "..application..");
+
+    // 7. Application never touches web DTOs: use cases take primitives and
+    // return model/ records; wire mapping (from()) lives at the web edge.
+    // Scoped to order/tenant like rule 4: reporting's port-local DTOs live
+    // under ..port.output.dto.. (deliberate, documented above) and must not
+    // trip this rule.
+    @ArchTest
+    static final ArchRule orderApplicationDoesNotDependOnDto = noClasses()
+            .that().resideInAPackage("..order.application..")
+            .should().dependOnClassesThat().resideInAPackage("..order.dto..");
+
+    @ArchTest
+    static final ArchRule tenantApplicationDoesNotDependOnDto = noClasses()
+            .that().resideInAPackage("..tenant.application..")
+            .should().dependOnClassesThat().resideInAPackage("..tenant.dto..");
+
+    // 8. Read models are framework-free: ..model.. records must not import
+    // Spring or Jakarta, so they stay usable by any future adapter.
+    @ArchTest
+    static final ArchRule modelsAreFrameworkFree = noClasses()
+            .that().resideInAPackage("..model..")
+            .should().dependOnClassesThat()
+            .resideInAnyPackage("org.springframework..", "jakarta..");
+
+    // 9. Shared web infrastructure (error bodies, filters) is driving-side
+    // plumbing: it must never reach into driven adapters or the application
+    // layer directly (that would bypass ports).
+    @ArchTest
+    static final ArchRule sharedWebDoesNotDependOnApplicationOrPersistence = noClasses()
+            .that().resideInAPackage("com.enterpriseorders.backend.web..")
+            .should().dependOnClassesThat()
+            .resideInAnyPackage("..adapter.persistence..", "..application..");
 
     private static DescribedPredicate<JavaClass> dependsOnSimpleName(
             String simpleName, String description) {

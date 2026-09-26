@@ -2,6 +2,7 @@ package com.enterpriseorders.backend.order;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.execution.ExecutionContext;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.order.application.IdempotentOperationExecutor;
 import com.enterpriseorders.backend.order.application.OrderService;
 import com.enterpriseorders.backend.order.model.OrderView;
@@ -78,7 +79,7 @@ class OrderServiceTest {
                 .thenReturn(Optional.of(new IdempotencyStore.IdempotencyRecord(
                         0L, "CREATE_ORDER", "COMPLETED", payload)));
         when(idempotencyStore.insertPending(TENANT_ID, "create-key", "CREATE_ORDER", 0L)).thenReturn(true);
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("create-key"), anyString())).thenReturn(1);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("create-key"), eq(1L), anyString())).thenReturn(1);
 
         OrderView first = orderService.createOrder(100L, "USD", "create-key");
         OrderView retry = orderService.createOrder(100L, "USD", "create-key");
@@ -87,7 +88,25 @@ class OrderServiceTest {
         assertEquals(1L, retry.orderId());
         assertEquals("DRAFT", retry.status());
         verify(orderRepository, times(1)).create(TENANT_ID, 100L, "USD");
-        verify(idempotencyStore, times(1)).markCompleted(eq(TENANT_ID), eq("create-key"), anyString());
+        verify(idempotencyStore, times(1)).markCompleted(eq(TENANT_ID), eq("create-key"), eq(1L), anyString());
+    }
+
+    @Test
+    void shouldRejectCreateWhenKeyReusedWithDifferentParams() throws Exception {
+        // Same key, different customer/currency: the stored COMPLETED record
+        // belongs to another order. Must 409, never silently return it.
+        OrderView firstOrder = new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
+        String payload = objectMapper.writeValueAsString(firstOrder);
+        when(idempotencyStore.findByKey(TENANT_ID, "shared-key"))
+                .thenReturn(Optional.of(new IdempotencyStore.IdempotencyRecord(
+                        1L, "CREATE_ORDER", "COMPLETED", payload)));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> orderService.createOrder(200L, "EUR", "shared-key"));
+
+        assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
+        verify(orderRepository, never()).create(anyLong(), anyLong(), anyString());
     }
 
     @Test
@@ -123,7 +142,7 @@ class OrderServiceTest {
                 .thenReturn(Optional.of(new IdempotencyStore.IdempotencyRecord(
                         1L, "CONFIRM_ORDER", "COMPLETED", payload)));
         when(idempotencyStore.insertPending(TENANT_ID, "test-key", "CONFIRM_ORDER", 1L)).thenReturn(true);
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("test-key"), anyString())).thenReturn(1);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("test-key"), eq(1L), anyString())).thenReturn(1);
 
         OrderView first = orderService.confirmOrder(1L, "test-key");
         assertEquals("CONFIRMED", first.status());
@@ -132,7 +151,7 @@ class OrderServiceTest {
         assertEquals("CONFIRMED", retry.status());
 
         verify(orderRepository, times(1)).confirm(TENANT_ID, 1L, "APP_JAVA", null);
-        verify(idempotencyStore, times(1)).markCompleted(eq(TENANT_ID), eq("test-key"), anyString());
+        verify(idempotencyStore, times(1)).markCompleted(eq(TENANT_ID), eq("test-key"), eq(1L), anyString());
     }
 
     @Test
@@ -140,7 +159,7 @@ class OrderServiceTest {
         when(tenantContext.getTenantId()).thenReturn(null);
         BusinessException ex = assertThrows(BusinessException.class, () -> orderService.getOrder(1L));
         assertEquals("TENANT_CONTEXT_MISSING", ex.getCode());
-        assertEquals(503, ex.getHttpStatus());
+        assertEquals(503, GlobalExceptionHandler.statusFor(ex.getCode()).value());
     }
 
     @Test
@@ -178,7 +197,7 @@ class OrderServiceTest {
                 .thenReturn(Optional.of(new IdempotencyStore.IdempotencyRecord(
                         1L, "CANCEL_ORDER", "COMPLETED", payload)));
         when(idempotencyStore.insertPending(TENANT_ID, "cancel-key", "CANCEL_ORDER", 1L)).thenReturn(true);
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("cancel-key"), anyString())).thenReturn(1);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("cancel-key"), eq(1L), anyString())).thenReturn(1);
 
         OrderView first = orderService.cancelOrder(1L, "Customer request", "cancel-key");
         OrderView retry = orderService.cancelOrder(1L, "Customer request", "cancel-key");
@@ -194,7 +213,7 @@ class OrderServiceTest {
                 () -> orderService.cancelOrder(1L, null, null));
 
         assertEquals("CANCEL_REASON_REQUIRED", ex.getCode());
-        assertEquals(400, ex.getHttpStatus());
+        assertEquals(400, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(orderRepository, never()).cancel(anyLong(), anyLong(), anyString(), anyString(), anyString());
     }
 
@@ -214,12 +233,12 @@ class OrderServiceTest {
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(confirmedOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "idem-123")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(TENANT_ID, "idem-123", "CONFIRM_ORDER", 1L)).thenReturn(true);
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("idem-123"), anyString())).thenReturn(1);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("idem-123"), eq(1L), anyString())).thenReturn(1);
 
         OrderView result = orderService.confirmOrder(1L, "idem-123");
 
         assertEquals("CONFIRMED", result.status());
-        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("idem-123"), anyString());
+        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("idem-123"), eq(1L), anyString());
     }
 
     @Test
@@ -231,7 +250,7 @@ class OrderServiceTest {
         OrderView result = orderService.confirmOrder(1L, null);
 
         assertEquals("CONFIRMED", result.status());
-        verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), anyString());
+        verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), eq(1L), anyString());
         verify(idempotencyStore, never()).findByKey(anyLong(), anyString());
     }
 
@@ -257,7 +276,7 @@ class OrderServiceTest {
                 () -> orderService.confirmOrder(1L, "key-123"));
         assertEquals("ORDER_NOT_CONFIRMABLE", ex.getCode());
         verify(orderRepository, never()).confirm(anyLong(), anyLong(), anyString(), anyString());
-        verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), anyString());
+        verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), eq(1L), anyString());
     }
 
     @Test
@@ -269,7 +288,7 @@ class OrderServiceTest {
                 () -> orderService.cancelOrder(1L, "Too late", null));
 
         assertEquals("ORDER_SHIPPED_NOT_CANCELLABLE", ex.getCode());
-        assertEquals(409, ex.getHttpStatus());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(orderRepository, never()).cancel(anyLong(), anyLong(), anyString(), anyString(), anyString());
     }
 
@@ -304,6 +323,6 @@ class OrderServiceTest {
                 () -> orderService.registerPayment(1L, "PAY-001", new java.math.BigDecimal("50.00"), "USD", "CARD", "key-1"));
         assertEquals("PAYMENT_STATE_INVALID", ex.getCode());
         verify(orderRepository, never()).registerPayment(anyLong(), anyLong(), anyString(), any(), anyString(), anyString(), anyString(), anyString());
-        verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), anyString());
+        verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), eq(1L), anyString());
     }
 }

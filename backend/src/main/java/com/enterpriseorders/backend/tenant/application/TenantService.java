@@ -7,7 +7,6 @@ import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,11 +30,18 @@ public class TenantService implements CreateTenantUseCase, GetTenantQuery, Resol
         return tenantRepository.findById(tenantId);
     }
 
+    /**
+     * Resolves a tenant code to its id. Unknown or inactive codes raise
+     * {@code TENANT_ACCESS_DENIED} (401, deliberate anti-enumeration: the
+     * resolution path must not reveal whether a code exists), while the
+     * persistence adapter reports a genuinely absent record as
+     * {@code TENANT_NOT_FOUND} (404). See {@code GlobalExceptionHandler}.
+     */
     @Override
     @Transactional(readOnly = true)
     public long resolveActiveTenantId(String tenantCode) {
         return tenantRepository.findActiveTenantIdByCode(tenantCode)
-                .orElseThrow(() -> new BusinessException("TENANT_NOT_FOUND",
-                        "Unknown or inactive tenant", HttpStatus.UNAUTHORIZED));
+                .orElseThrow(() -> new BusinessException("TENANT_ACCESS_DENIED",
+                        "Unknown or inactive tenant"));
     }
 }

@@ -8,10 +8,15 @@ nodes:
     # NodePorts exposed on the host for QA smoke tests / Flyway from the workstation:
     #   8080 -> backend  (Service NodePort 30080)
     #   1521 -> Oracle   (Service NodePort 30152)
+    # Listen on loopback only: the QA lab must never be reachable from the
+    # LAN. kind defaults extraPortMappings to 0.0.0.0 when listenAddress
+    # is omitted.
     extraPortMappings:
       - containerPort: 30080
         hostPort: 8080
+        listenAddress: 127.0.0.1
         protocol: TCP
       - containerPort: 30152
         hostPort: 1521
+        listenAddress: 127.0.0.1
         protocol: TCP

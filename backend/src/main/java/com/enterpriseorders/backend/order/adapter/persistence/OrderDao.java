@@ -6,7 +6,6 @@ import com.enterpriseorders.backend.exception.PlsqlErrorMapper;
 import com.enterpriseorders.backend.order.model.OrderView;
 import com.enterpriseorders.backend.order.model.OrderView.OrderLineView;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -42,7 +41,7 @@ public class OrderDao implements OrderRepository {
                 rs -> {
                     if (!rs.next()) {
                         throw new BusinessException("ORDER_NOT_FOUND",
-                                "Order not found: " + orderId, HttpStatus.NOT_FOUND);
+                                "Order not found: " + orderId);
                     }
                     return new OrderView(
                             rs.getLong("order_id"),

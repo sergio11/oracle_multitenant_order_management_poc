@@ -9,6 +9,8 @@ import com.enterpriseorders.backend.reporting.port.input.GetTopProductsQuery;
 import com.enterpriseorders.backend.reporting.port.input.RefreshMaterializedViewsUseCase;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,6 +25,8 @@ import java.util.List;
 @RequestMapping("/api/v1/reports")
 @Validated
 public class ReportingController {
+
+    private static final Logger log = LoggerFactory.getLogger(ReportingController.class);
 
     private final GetDailyOrdersQuery getDailyOrdersQuery;
     private final GetTopProductsQuery getTopProductsQuery;
@@ -79,6 +83,7 @@ public class ReportingController {
             }
         } catch (RuntimeException ignored) {
             // Best-effort freshness signal only; never fail a report read.
+            log.debug("Freshness header skipped", ignored);
         }
         return builder;
     }

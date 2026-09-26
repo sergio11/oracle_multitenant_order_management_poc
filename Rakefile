@@ -347,6 +347,31 @@ def exec_sql_file_in_pod!(remote_script, script_args, user, pass, label)
                user, pass, label)
 end
 
+# Run a self-verifying SQL suite already staged in the pod.
+# Unlike sql_via_pod!, this does NOT scan for ORA-/SP2-/PLS- markers:
+# suites like T_security deliberately print EXPECTED ORA errors
+# ("rejected as expected"). The contract is: exit status 0 AND the
+# suite's own PASSED marker present in the output.
+def run_sql_suite_in_pod!(remote_script, script_args, user, pass, label, pass_marker)
+  args = script_args.map(&:to_s).join(' ')
+  conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
+  cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, oracle_pod!,
+         '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)}"]
+  stdin_text = "WHENEVER SQLERROR EXIT FAILURE\n@#{remote_script} #{args}\nEXIT SUCCESS\n"
+  puts "\n$ #{redact(cmd.join(' '))}  # via in-pod sqlplus (#{label})"
+  out = IO.popen(cmd, 'r+') do |io|
+    io.write(stdin_text)
+    io.close_write
+    io.read
+  end
+  puts out unless out.strip.empty?
+  raise "SQL suite failed (#{label}): non-zero exit" unless $CHILD_STATUS.success?
+  raise "SQL suite failed (#{label}): missing '#{pass_marker}'" unless out.include?(pass_marker)
+
+  puts "SUITE PASSED (#{label})"
+  out
+end
+
 # Run a SQL script as APP_OWNER against the Oracle NodePort using sqlplus.
 # Falls back to an in-pod sqlplus via kubectl exec when no local client exists.
 # Pass db_user:/db_password: to run as another schema user (e.g. APP_RUNTIME).
@@ -692,6 +717,87 @@ namespace :qa do
         end
       end
     end
+
+    desc 'Verify the 16 VPD policies are present with correct attributes (APP_OWNER)'
+    task :'verify-vpd' do
+      ensure_cluster!
+      env = load_env_file
+      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      script = File.join(ROOT, 'database', 'security', 'verify_vpd_policies.sql')
+      abort "Missing #{script}" unless File.exist?(script)
+      cp_to_pod!(script, '/tmp/verify_vpd_policies.sql')
+      run_sql_suite_in_pod!('/tmp/verify_vpd_policies.sql', [],
+                            env['APP_OWNER_USER'], env['APP_OWNER_PWD'],
+                            'verify-vpd',
+                            '=== VPD verification PASSED: 16/16 policies OK ===')
+    end
+
+    desc 'VPD cross-tenant isolation suite T_security_tenant_isolation.sql (APP_RUNTIME)'
+    task :security do
+      ensure_cluster!
+      env = load_env_file
+      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      script = File.join(ROOT, 'tests', 'security', 'T_security_tenant_isolation.sql')
+      abort "Missing #{script}" unless File.exist?(script)
+      cp_to_pod!(script, '/tmp/T_security_tenant_isolation.sql')
+      run_sql_suite_in_pod!('/tmp/T_security_tenant_isolation.sql', [],
+                            env['APP_RUNTIME_USER'], env['APP_RUNTIME_PWD'],
+                            'security', '=== SECURITY: tenant isolation PASSED ===')
+    end
+
+    desc 'Order-to-payment integration suite IT_order_to_payment.sql (APP_RUNTIME)'
+    task :it do
+      ensure_cluster!
+      env = load_env_file
+      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      script = File.join(ROOT, 'tests', 'integration', 'IT_order_to_payment.sql')
+      abort "Missing #{script}" unless File.exist?(script)
+      cp_to_pod!(script, '/tmp/IT_order_to_payment.sql')
+      out = run_sql_suite_in_pod!('/tmp/IT_order_to_payment.sql', [],
+                                  env['APP_RUNTIME_USER'], env['APP_RUNTIME_PWD'],
+                                  'it', '=== IT: order-to-payment flow PASSED ===')
+      # Owner-side cleanup: the suite's own cleanup is best-effort by design
+      # (APP_RUNTIME holds no DELETE on business tables - least privilege),
+      # so a passing run still leaves its CONFIRMED+PAID probe order behind.
+      # Remove exactly this run's rows as APP_OWNER (children before parent)
+      # and release its 2 reserved units (qty=2 PRD-001/WH1/ACME, fixed in
+      # the suite). Skipped when the suite cleaned up after itself.
+      if out.include?('Cleanup OK: test order rows removed')
+        puts 'Suite self-cleanup OK - nothing left behind.'
+      else
+        oid = out[/Created order_id=(\d+)/, 1]
+        abort 'IT passed but order_id not found - manual cleanup required' unless oid
+        sql_via_pod!(<<~SQL, env['APP_OWNER_USER'], env['APP_OWNER_PWD'], 'it-owner-cleanup')
+          WHENEVER SQLERROR EXIT SQL.SQLCODE
+          SET SERVEROUTPUT ON
+          VARIABLE v_t NUMBER
+          BEGIN SELECT tenant_id INTO :v_t FROM tenant WHERE tenant_code = 'ACME'; END;
+          /
+          DELETE FROM payment WHERE tenant_id = :v_t AND order_id = #{oid};
+          DELETE FROM order_status_history WHERE tenant_id = :v_t AND order_id = #{oid};
+          DELETE FROM sales_order_line WHERE tenant_id = :v_t AND order_id = #{oid};
+          DELETE FROM outbox_event WHERE tenant_id = :v_t AND aggregate_type = 'SALES_ORDER'
+            AND aggregate_id = '#{oid}';
+          DELETE FROM audit_event WHERE tenant_id = :v_t AND entity_type = 'SALES_ORDER'
+            AND entity_id = '#{oid}';
+          DELETE FROM sales_order WHERE tenant_id = :v_t AND order_id = #{oid};
+          UPDATE inventory
+             SET available_quantity = available_quantity + 2,
+                 reserved_quantity = reserved_quantity - 2
+           WHERE tenant_id = :v_t
+             AND product_id = (SELECT product_id FROM product WHERE tenant_id = :v_t AND sku = 'PRD-001')
+             AND warehouse_id = (SELECT warehouse_id FROM warehouse WHERE tenant_id = :v_t AND code = 'WH1');
+          COMMIT;
+          PROMPT IT owner-cleanup OK
+          EXIT SUCCESS
+        SQL
+      end
+    end
+
+    desc 'verify-vpd + security + it (full DB verification)'
+    task :verify => ['qa:db:verify-vpd', 'qa:db:security', 'qa:db:it'] do
+      puts 'DB VERIFICATION PASSED (verify-vpd + security + it).'
+    end
   end
 
   desc 'QA smoke tests: health, auth, order flow, idempotency, tenant isolation'
@@ -862,24 +968,42 @@ namespace :qa do
       check.call('Tenant isolation (ACME vs GLOBEX)', false, e.message)
     end
 
-    # 7) Admin-only endpoint rejects operator
+    # 7) Tenant provisioning RBAC + FR-001 positive path (admin creates,
+    #    operator is rejected). The positive body must be fully valid: the
+    #    create path runs with a cleared VPD context and writes the audit
+    #    row via definer's-rights pkg_audit (APP_OWNER holds EXEMPT ACCESS
+    #    POLICY), so 201 proves the whole chain end to end. Fixed code
+    #    QA_SMOKE: first run -> 201, re-runs -> 409 TENANT_ALREADY_EXISTS
+    #    (procedure reached = path alive, no tenant-table pollution).
     begin
-      res = http_post("#{BACKEND_URL}/api/v1/tenants",
-                      '{"tenantCode":"QA_T","name":"QA Tenant"}',
-                      user: operator,
-                      headers: { 'X-Tenant-ID' => 'ACME' })
-      check.call('POST /tenants as operator -> 401/403', [401, 403].include?(res.code.to_i),
-                 "HTTP #{res.code}")
+      denied = http_post("#{BACKEND_URL}/api/v1/tenants",
+                         '{"tenantCode":"QA_T","name":"QA Tenant"}',
+                         user: operator,
+                         headers: { 'X-Tenant-ID' => 'ACME' })
+      created = http_post("#{BACKEND_URL}/api/v1/tenants",
+                          '{"tenantCode":"QA_SMOKE","name":"QA Smoke Tenant",' \
+                          '"tier":"STANDARD","isolationMode":"SHARED_SCHEMA"}',
+                          user: admin,
+                          headers: { 'X-Tenant-ID' => 'ACME' })
+      ok_deny = [401, 403].include?(denied.code.to_i)
+      ok_create = [201, 409].include?(created.code.to_i)
+      check.call('POST /tenants RBAC + FR-001 positive path',
+                 ok_deny && ok_create,
+                 "operator=#{denied.code} admin=#{created.code} #{created.body.to_s[0, 100]}")
     rescue StandardError => e
-      check.call('POST /tenants as operator -> 401/403', false, e.message)
+      check.call('POST /tenants RBAC + FR-001 positive path', false, e.message)
     end
 
-    # 8) Actuator metrics reachable (management base-path /internal)
+    # 8) Actuator metrics reachable (management base-path /internal).
+    #    Unlike /internal/health, metrics require authentication.
     begin
-      res = http_get("#{BACKEND_URL}/internal/health")
-      check.call('Health body present', !res.body.to_s.empty?, res.body.to_s[0, 80])
+      res = http_get("#{BACKEND_URL}/internal/metrics", user: admin)
+      body = res.body.to_s
+      check.call('GET /internal/metrics (admin)',
+                 res.code.to_i == 200 && body.include?('names'),
+                 "HTTP #{res.code} #{body[0, 80]}")
     rescue StandardError => e
-      check.call('Health body present', false, e.message)
+      check.call('GET /internal/metrics (admin)', false, e.message)
     end
 
     puts

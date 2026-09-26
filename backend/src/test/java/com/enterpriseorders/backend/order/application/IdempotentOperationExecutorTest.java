@@ -1,6 +1,7 @@
 package com.enterpriseorders.backend.order.application;
 
 import com.enterpriseorders.backend.exception.BusinessException;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.order.model.OrderView;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
@@ -69,7 +70,7 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "k".repeat(101), "CONFIRM_ORDER", ORDER_ID, action));
 
         assertEquals("INVALID_IDEMPOTENCY_KEY", ex.getCode());
-        assertEquals(400, ex.getHttpStatus());
+        assertEquals(400, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verifyNoInteractions(idempotencyStore);
         verify(action, never()).get();
     }
@@ -114,7 +115,7 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "key-create-legacy", "CREATE_ORDER", 0L, action));
 
         assertEquals("IDEMPOTENCY_PAYLOAD_MISSING", ex.getCode());
-        assertEquals(500, ex.getHttpStatus());
+        assertEquals(500, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(action, never()).get();
         verify(orderRepository, never()).findById(anyLong(), anyLong());
     }
@@ -129,7 +130,7 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "key-pending", "CONFIRM_ORDER", ORDER_ID, action));
 
         assertEquals("IDEMPOTENCY_IN_PROGRESS", ex.getCode());
-        assertEquals(409, ex.getHttpStatus());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(action, never()).get();
         verify(idempotencyStore, never()).insertPending(anyLong(), anyString(), anyString(), anyLong());
     }
@@ -138,35 +139,35 @@ class IdempotentOperationExecutorTest {
     void shouldReexecuteWhenRecordIsFailed() {
         var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "FAILED", null);
         when(idempotencyStore.findByKey(TENANT_ID, "key-failed")).thenReturn(Optional.of(record));
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-failed"), anyString())).thenReturn(1);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-failed"), eq(ORDER_ID), anyString())).thenReturn(1);
 
         OrderView result = executor.execute(TENANT_ID, "key-failed", "CONFIRM_ORDER", ORDER_ID,
                 () -> mockResponse);
 
         assertEquals(ORDER_ID, result.orderId());
         verify(idempotencyStore, never()).insertPending(anyLong(), anyString(), anyString(), anyLong());
-        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("key-failed"), contains("CONFIRMED"));
+        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("key-failed"), eq(ORDER_ID), contains("CONFIRMED"));
     }
 
     @Test
     void shouldExecuteActionAndStoreWhenNewKey() {
         when(idempotencyStore.findByKey(TENANT_ID, "key-456")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(TENANT_ID, "key-456", "CONFIRM_ORDER", ORDER_ID)).thenReturn(true);
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-456"), anyString())).thenReturn(1);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-456"), eq(ORDER_ID), anyString())).thenReturn(1);
 
         OrderView result = executor.execute(TENANT_ID, "key-456", "CONFIRM_ORDER", ORDER_ID,
                 () -> mockResponse);
 
         assertEquals(ORDER_ID, result.orderId());
         verify(idempotencyStore).insertPending(TENANT_ID, "key-456", "CONFIRM_ORDER", ORDER_ID);
-        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("key-456"), contains("CONFIRMED"));
+        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("key-456"), eq(ORDER_ID), contains("CONFIRMED"));
     }
 
     @Test
     void shouldThrowWhenMarkCompletedUpdatesNoRows() {
         when(idempotencyStore.findByKey(TENANT_ID, "key-noupdate")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(TENANT_ID, "key-noupdate", "CONFIRM_ORDER", ORDER_ID)).thenReturn(true);
-        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-noupdate"), anyString())).thenReturn(0);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-noupdate"), eq(ORDER_ID), anyString())).thenReturn(0);
 
         assertThrows(IllegalStateException.class,
                 () -> executor.execute(TENANT_ID, "key-noupdate", "CONFIRM_ORDER", ORDER_ID,
@@ -183,7 +184,7 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "key-race", "CONFIRM_ORDER", ORDER_ID, action));
 
         assertEquals("IDEMPOTENCY_RACE_CONFLICT", ex.getCode());
-        assertEquals(409, ex.getHttpStatus());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(action, never()).get();
         verify(orderRepository, never()).findById(anyLong(), anyLong());
     }
@@ -214,7 +215,7 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "key-op-conflict", "CONFIRM_ORDER", ORDER_ID, () -> mockResponse));
 
         assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
-        assertEquals(409, ex.getHttpStatus());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(orderRepository, never()).findById(anyLong(), anyLong());
     }
 
@@ -240,7 +241,7 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "key-agg-conflict", "CONFIRM_ORDER", ORDER_ID, () -> mockResponse));
 
         assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
-        assertEquals(409, ex.getHttpStatus());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(orderRepository, never()).findById(anyLong(), anyLong());
     }
 
@@ -256,7 +257,39 @@ class IdempotentOperationExecutorTest {
                 () -> executor.execute(TENANT_ID, "key-race-conflict", "CONFIRM_ORDER", ORDER_ID, () -> mockResponse));
 
         assertEquals("IDEMPOTENCY_KEY_CONFLICT", ex.getCode());
-        assertEquals(409, ex.getHttpStatus());
+        assertEquals(409, GlobalExceptionHandler.statusFor(ex.getCode()).value());
         verify(orderRepository, never()).findById(anyLong(), anyLong());
+    }
+
+    @Test
+    void shouldMatchCreateSentinelAgainstStoredRealAggregate() throws Exception {
+        // CREATE_ORDER binds the key with the 0 sentinel; the COMPLETED row
+        // carries the real order id after backfill. A same-key retry with the
+        // sentinel must replay, not 409.
+        String payload = objectMapper.writeValueAsString(mockResponse);
+        var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CREATE_ORDER", "COMPLETED", payload);
+        when(idempotencyStore.findByKey(TENANT_ID, "key-create-retry")).thenReturn(Optional.of(record));
+
+        Supplier<OrderView> action = mock(Supplier.class);
+        OrderView result = executor.execute(TENANT_ID, "key-create-retry", "CREATE_ORDER", 0L, action);
+
+        assertEquals(ORDER_ID, result.orderId());
+        verify(action, never()).get();
+    }
+
+    @Test
+    void shouldBackfillRealAggregateIdOnCompletion() {
+        when(idempotencyStore.findByKey(TENANT_ID, "key-create-new")).thenReturn(Optional.empty());
+        when(idempotencyStore.insertPending(TENANT_ID, "key-create-new", "CREATE_ORDER", 0L)).thenReturn(true);
+        when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-create-new"), eq(ORDER_ID), anyString()))
+                .thenReturn(1);
+
+        OrderView result = executor.execute(TENANT_ID, "key-create-new", "CREATE_ORDER", 0L,
+                () -> mockResponse);
+
+        assertEquals(ORDER_ID, result.orderId());
+        // The created order's id (not the 0 sentinel) is persisted, so later
+        // payload-less replays can fall back to findById.
+        verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("key-create-new"), eq(ORDER_ID), anyString());
     }
 }

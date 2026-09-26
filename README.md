@@ -144,7 +144,7 @@ Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inven
 |---|---|
 | 🔐 **Database-level multi-tenancy** | VPD/DBMS_RLS on 16 objects — invisible, fail-closed isolation. No application code can leak cross-tenant data. |
 | ⚡ **Atomic business logic** | PL/SQL `confirm_order` procedure: validates + locks + reserves + transitions + audits + outbox in one transaction. Java domain deleted — PL/SQL is the single authority. |
-| 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (~11 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral model types (`OrderView`, `TenantView`); controllers map to DTOs (wire JSON unchanged). |
+| 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (15 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral model types (`OrderView`, `TenantView`); controllers map to DTOs (wire JSON unchanged). Error-code→HTTP mapping lives only in `GlobalExceptionHandler`. |
 | 🔄 **Idempotent operations** | Create/confirm/cancel/payment accept `Idempotency-Key`; replay returns the ORIGINAL stored payload; PENDING→409, FAILED→re-execute. |
 | 📦 **Transactional outbox** | Outbox events written atomically by PL/SQL within the same transaction as business mutations. Publisher/relayer is out of POC scope (see Known Limitations). |
 | 🛡️ **Pessimistic locking** | `SELECT FOR UPDATE` on inventory prevents overselling. Concurrency test proves exactly-1-of-N success with stock=1. |
@@ -441,7 +441,7 @@ cd backend
 mvn clean test
 ```
 
-> ✅ **234 tests in 22 test classes — 0 failures.** (incl. ArchUnit hexagonal rules, SecurityMatrixTest, CredentialHardeningCheckTest, OrderDaoTest, IdempotencyDaoTest, PaymentMethodConsistencyTest)
+> ✅ **248 tests in 22 test classes — 0 failures.** (incl. ArchUnit hexagonal rules, SecurityMatrixTest, CredentialHardeningCheckTest, OrderDaoTest, IdempotencyDaoTest, PaymentMethodConsistencyTest)
 
 ### 📋 Test Types
 
@@ -505,7 +505,7 @@ poc_oracle/
 │       │   ├── 📄 application.yml          # Main config (spring.flyway.enabled=false; local profile)
 │       │   ├── 📄 application-test.yml     # Test profile
 │       │   └── 📄 application-prod.yml     # Production profile (requires env passwords, no defaults)
-│       └── 📂 test/java/.../               # 22 test classes / 234 tests (JaCoCo report under target/site/jacoco)
+│       └── 📂 test/java/.../               # 22 test classes / 248 tests (JaCoCo report under target/site/jacoco)
 ├── 🗄️ database/
 │   ├── 📂 migrations/                      # 22 Flyway-versioned SQL files (V001-V022)
 │   │                                        #   V019 reporting/runtime revoke · V020 reserved_warehouse_id · V021 outbox dedup · V022 payload 4000
@@ -623,6 +623,8 @@ curl -X POST http://localhost:8080/api/v1/orders \
 
 Repeatable end-to-end QA on a local kind cluster (separate from the compose lab above). The whole flow is scripted in the `Rakefile` (`rake -T` lists all tasks; run from the repo root).
 
+> 🔑 **The QA cluster intentionally runs the `local` Spring profile** with in-memory users and lab credentials (`admin:changeme`, see `SECURITY.md`). Kind port mappings bind to `127.0.0.1` only. The `prod` profile (env-only secrets, fail-fast on weak passwords) is demonstrated by code and unit tests, not deployed in this lab.
+
 ### Prerequisites
 
 - 🐳 Podman (with machine running), `kind`, `kubectl`, `rake` (Ruby), Maven 3.9+
@@ -639,7 +641,8 @@ rake qa:image:load       # load image into the kind node (via tarball)
 rake qa:deploy           # namespace + secrets + Oracle StatefulSet + backend
 rake qa:db:init          # flyway migrate (V001–V022) + PL/SQL packages + seed
 rake qa:wait             # until Oracle + backend rollout are Ready
-rake qa:smoke            # 8 API checks: health, auth, order, idempotency-409, reports, refresh, RBAC
+rake qa:smoke            # 8 API checks: health, auth, order, idempotency-409, refresh, isolation, tenants (RBAC + FR-001), metrics
+rake qa:db:verify        # DB verification: 16 VPD policies + tenant isolation + order-to-payment suites
 ```
 
 ### DB test suites (run in the Oracle pod, which ships sqlplus)
@@ -666,7 +669,8 @@ rake qa:wait && rake qa:smoke   # recovery check
 | Check | Result |
 |---|---|
 | `mvn clean test` | 234/234 green in 22 classes (JaCoCo report, no gate by design; incl. ArchUnit, SecurityMatrix, CredentialHardening, DAO tests) |
-| `rake qa:smoke` | 8/8 PASS (health, 401, create, idempotency 409, tenant reports, refresh, RBAC — isolation now asserts REAL ACME-vs-GLOBEX difference) |
+| `rake qa:smoke` | 8/8 PASS (health, 401, create, idempotency 409, refresh, isolation, tenants RBAC + FR-001 positive path, metrics) |
+| `rake qa:db:verify` | verify-vpd (16/16) + T_security isolation + IT order-to-payment PASSED (IT owner-cleanup leaves no residue) |
 | `IT_order_to_payment.sql` | PASSED (confirm → payment → MV → audit → outbox asserts, CONFIRMED/PAID asserts + cleanup) |
 | `T_security_tenant_isolation.sql` | PASSED (orders/payments/inventory both directions + fail-closed + INSERT rejected + privilege asserts) |
 | Concurrency, 10 workers, stock=1 | `total=10 confirmed=1 failed=9` PASSED (stock 0/1 + balance asserts) |
@@ -753,13 +757,13 @@ rake qa:wait && rake qa:smoke   # recovery check
 
 Honest boundaries of this POC:
 
-- 🚫 **No CI pipeline** — tests must be run locally (`cd backend && mvn clean test`)
+- 🚫 **CI runs unit tests only** — `.github/workflows/maven.yml` runs `mvn clean test` (no DB needed: DAO tests mock JDBC). DB integration (VPD verify, tenant isolation, order-to-payment) runs in the lab via `rake qa:db:verify`.
 - 📦 **Outbox publisher not implemented** — no component polls `outbox_event` or marks events `PUBLISHED`; events stay `NEW`
 - 🌐 **Customer / Product / Inventory REST endpoints not implemented** (FR-004/005/006) — the API covers orders, tenants, and reports
 - 🏁 **Order flow ends at CONFIRMED/PAID** — no `SHIPPED`/`COMPLETED` endpoints (the state machine shows the full target lifecycle)
 - 👤 **Tenant resolved from `X-Tenant-ID` header + in-memory users** — not from identity claims; an operator is bound to `operator-allowed-tenants` (default ACME; ADMIN any, else 403). Residual: not JWT/LDAP.
 - 🏗️ **GoldenGate / RAC / Data Guard not running locally** — enterprise target architecture is documented only (GG illustrative `.ggsci`; RAC/ASM/DG live out of scope on the single-node lab)
-- ☕ **Spring Boot 3.3.5** — current pinned version
+- ☕ **Spring Boot 3.3.5** — current pinned version. NOTE (2026-09): the 3.3.x line is past OSS end-of-life (no security patches); kept deliberately for this POC snapshot. Upgrading to a supported 3.4/3.5 line + `mvn test` is the first backlog item before any real use — see `SECURITY.md`.
 - 📄 **PL/SQL package sources duplicated** — specs exist both in V010 migrations and `database/packages/pks_*` (bodies in `pkb_*`); they must be kept in sync manually
 - 💎 **Java domain aggregate deleted** — PL/SQL (`pkg_order_management`) is the single authority; `PaymentMethod` kept as literal enum + consistency test
 - 🌱 **Seed order matters** — package bodies must be deployed before seeding (`qa:db:init` order): only `pkg_tenant` may touch `APP_CTX` (direct `DBMS_SESSION` calls raise ORA-01031); seed ends with an explicit `COMMIT`
@@ -768,7 +772,10 @@ Honest boundaries of this POC:
 - 🐳 **kind nodes don't survive machine reboots** — recover with `podman start poc-qa-control-plane` (Oracle data survives on its PVC)
 - 🔄 **MV refresh limiter is per-JVM** — cooldown is not shared across app nodes (multi-node gap, documented)
 - 🔑 **Batch scripts use env vars with validation** (`DB_USER/DB_PASS/...` default to lab values with redacted warnings); rake secrets via temp env-file + redacted logs; remaining lab defaults (`LabRuntimePass1`, `changeme`) are local-only, prod requires env passwords
-- 🧹 **IT cleanup best-effort** — integration suites clean up created rows but depend on successful completion paths
+- 🧹 **IT cleanup is two-layered** — the suite's own cleanup is best-effort by design (`APP_RUNTIME` holds no `DELETE` on business tables, least privilege), so a passing run leaves its `CONFIRMED+PAID` probe order behind; `rake qa:db:it` removes exactly that run's rows as `APP_OWNER` (children before parent) and releases its 2 reserved units (fixed `qty=2 PRD-001/WH1/ACME` probe). Manual runs leave residue — re-running the rake task does not clean previous manual runs.
+- ➕ **`POST /{id}/lines` accepts no `Idempotency-Key`** — a retried add-line inserts a second row (total is re-summed). Create/confirm/cancel/payment are idempotent; add-line callers must not blindly retry. A key or a unique `(order_id, product_id)` guard is backlog (see ADR-005).
+- 🔀 **`TENANT_ACCESS_DENIED` (401) vs `TENANT_NOT_FOUND` (404)** — deliberate split: tenant resolution answers 401 without revealing whether a code exists (anti-enumeration); the persistence layer answers 404 for genuinely absent records. Same split documented in `GlobalExceptionHandler`.
+- 🧪 **No DB-backed Java tests** — DAO tests mock `JdbcTemplate`, so schema/SQL drift is caught by the lab suites (`rake qa:db:verify`), not by `mvn test`. A Testcontainers-Oracle suite is backlog.
 
 ---
 

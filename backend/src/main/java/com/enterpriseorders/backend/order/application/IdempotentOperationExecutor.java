@@ -7,7 +7,6 @@ import com.enterpriseorders.backend.order.port.output.IdempotencyStore.Idempoten
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.util.Objects;
@@ -29,6 +28,16 @@ import java.util.function.Supplier;
  *                  and overwrites the row (FAILED is never written by this
  *                  executor - a failed action rolls the whole transaction
  *                  back, PENDING row included).
+ *
+ * Key binding: a key is bound to operation+aggregate (misuse -> 409), except
+ * that the CREATE_ORDER sentinel aggregate (0: the order does not exist when
+ * the key is first seen) matches any stored aggregate. Same-param retries
+ * then replay normally; cross-param reuse is rejected by the caller's
+ * request fingerprint (customer+currency checked in OrderService), never by
+ * silently returning the first order.
+ *
+ * Completion backfills the real aggregate id from the action's response, so
+ * even payload-less replays can fall back to findById for creates.
  *
  * Assumptions: inside a single Spring transaction the PENDING insert is not
  * visible to other connections until commit, and the unique index serializes
@@ -62,7 +71,7 @@ public class IdempotentOperationExecutor {
         }
         if (idempotencyKey.length() > MAX_KEY_LENGTH) {
             throw new BusinessException("INVALID_IDEMPOTENCY_KEY",
-                    "Idempotency-Key must not exceed " + MAX_KEY_LENGTH + " characters", HttpStatus.BAD_REQUEST);
+                    "Idempotency-Key must not exceed " + MAX_KEY_LENGTH + " characters");
         }
         var existing = idempotencyStore.findByKey(tenantId, idempotencyKey);
         if (existing.isPresent()) {
@@ -72,11 +81,11 @@ public class IdempotentOperationExecutor {
             var raced = idempotencyStore.findByKey(tenantId, idempotencyKey);
             if (raced.isEmpty()) {
                 throw new BusinessException("IDEMPOTENCY_RACE_CONFLICT",
-                        "Concurrent request in flight for this idempotency key", HttpStatus.CONFLICT);
+                        "Concurrent request in flight for this idempotency key");
             }
             return resolve(tenantId, idempotencyKey, raced.get(), operation, aggregateId, action);
         }
-        return complete(tenantId, idempotencyKey, action);
+        return complete(tenantId, idempotencyKey, aggregateId, action);
     }
 
     private OrderView resolve(Long tenantId, String idempotencyKey, IdempotencyRecord record,
@@ -86,11 +95,11 @@ public class IdempotentOperationExecutor {
             return replay(tenantId, record);
         }
         if ("FAILED".equals(record.status())) {
-            return complete(tenantId, idempotencyKey, action);
+            return complete(tenantId, idempotencyKey, aggregateId, action);
         }
         if ("PENDING".equals(record.status())) {
             throw new BusinessException("IDEMPOTENCY_IN_PROGRESS",
-                    "Another request with this idempotency key is still in progress", HttpStatus.CONFLICT);
+                    "Another request with this idempotency key is still in progress");
         }
         throw new IllegalStateException("Unexpected idempotency status: " + record.status());
     }
@@ -109,12 +118,18 @@ public class IdempotentOperationExecutor {
             return orderRepository.findById(tenantId, record.aggregateId());
         }
         throw new BusinessException("IDEMPOTENCY_PAYLOAD_MISSING",
-                "Original response for this idempotency key is unavailable", HttpStatus.INTERNAL_SERVER_ERROR);
+                "Original response for this idempotency key is unavailable");
     }
 
-    private OrderView complete(Long tenantId, String idempotencyKey, Supplier<OrderView> action) {
+    private OrderView complete(Long tenantId, String idempotencyKey, Long aggregateId,
+                                 Supplier<OrderView> action) {
         OrderView response = action.get();
-        int updated = idempotencyStore.markCompleted(tenantId, idempotencyKey, serializeForStorage(response));
+        // Backfill the real aggregate: CREATE_ORDER inserts PENDING with the
+        // 0 sentinel, so the created order's id must be persisted now, or a
+        // later payload-less replay could not fall back to findById.
+        Long completedAggregate = response.orderId() != null ? response.orderId() : aggregateId;
+        int updated = idempotencyStore.markCompleted(tenantId, idempotencyKey,
+                completedAggregate, serializeForStorage(response));
         if (updated != 1) {
             throw new IllegalStateException(
                     "Idempotency completion updated " + updated + " row(s) for operation");
@@ -136,13 +151,25 @@ public class IdempotentOperationExecutor {
     }
 
     private void validateKeyMatches(IdempotencyRecord record, String idempotencyKey,
-                                    String operation, Long aggregateId) {
+                                     String operation, Long aggregateId) {
         if (!Objects.equals(operation, record.operation())
-                || !Objects.equals(aggregateId, record.aggregateId())) {
+                || (!isAggregateSentinel(aggregateId)
+                        && !Objects.equals(aggregateId, record.aggregateId()))) {
             throw new BusinessException("IDEMPOTENCY_KEY_CONFLICT",
                     "Idempotency key '" + truncate(idempotencyKey) + "' was already used for a "
-                            + "different operation or order; it cannot be reused", HttpStatus.CONFLICT);
+                            + "different operation or order; it cannot be reused");
         }
+    }
+
+    /**
+     * CREATE_ORDER binds the key before the order exists (sentinel 0, V012
+     * NOT NULL). A sentinel caller accepts whatever aggregate the stored
+     * record carries; request identity for creates is enforced by the
+     * caller's fingerprint, not here. Real order ids start at 1, so 0 (or
+     * null) can never be a genuine aggregate.
+     */
+    private boolean isAggregateSentinel(Long aggregateId) {
+        return aggregateId == null || aggregateId == 0L;
     }
 
     private String truncate(String idempotencyKey) {

@@ -3,7 +3,7 @@ package com.enterpriseorders.backend.tenant.adapter.web;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
-import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
+import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import com.enterpriseorders.backend.web.error.ApiError;
 import com.enterpriseorders.backend.web.filter.CorrelationFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.MDC;
-import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -38,7 +38,7 @@ class TenantContextFilterTest {
 
     @Mock private ResolveTenantUseCase resolveTenantUseCase;
     @Mock private TenantContextHolder tenantContextHolder;
-    @Mock private UserTenancy userTenancy;
+    @Mock private RoleTenancy roleTenancy;
     @Mock private ObjectMapper objectMapper;
     @Mock private HttpServletRequest request;
     @Mock private HttpServletResponse response;
@@ -48,7 +48,7 @@ class TenantContextFilterTest {
 
     @BeforeEach
     void setUp() {
-        filter = new TenantContextFilter(resolveTenantUseCase, tenantContextHolder, userTenancy, objectMapper);
+        filter = new TenantContextFilter(resolveTenantUseCase, tenantContextHolder, roleTenancy, objectMapper);
         SecurityContextHolder.clearContext();
         MDC.clear();
     }
@@ -90,14 +90,14 @@ class TenantContextFilterTest {
         verify(filterChain).doFilter(request, response);
         verify(tenantContextHolder, atLeastOnce()).clear();
         // Admin bypass: tenancy port must not gate admins.
-        verify(userTenancy, never()).isAllowed(anyString(), anyString());
+        verify(roleTenancy, never()).isAllowed(anyString());
     }
 
     @Test
     void shouldChainWhenOperatorAllowed() throws Exception {
         stubRequest("/api/v1/orders", "ACME");
         authenticate("operator", "ROLE_ORDER_OPERATOR");
-        when(userTenancy.isAllowed("operator", "ACME")).thenReturn(true);
+        when(roleTenancy.isAllowed("ACME")).thenReturn(true);
         when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenReturn(1L);
 
         filter.doFilterInternal(request, response, filterChain);
@@ -111,7 +111,7 @@ class TenantContextFilterTest {
         stubRequest("/api/v1/orders", "OTHER");
         stubWriter();
         authenticate("operator", "ROLE_ORDER_OPERATOR");
-        when(userTenancy.isAllowed("operator", "OTHER")).thenReturn(false);
+        when(roleTenancy.isAllowed("OTHER")).thenReturn(false);
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -138,6 +138,37 @@ class TenantContextFilterTest {
     }
 
     @Test
+    void shouldReturn401WhenAnonymous() throws Exception {
+        stubRequest("/api/v1/orders", "ACME");
+        stubWriter();
+        // AnonymousAuthenticationToken reports isAuthenticated() == true,
+        // so the filter must reject it explicitly.
+        SecurityContextHolder.getContext().setAuthentication(
+                new AnonymousAuthenticationToken("key", "anonymousUser",
+                        List.of(new SimpleGrantedAuthority("ROLE_ORDER_OPERATOR"))));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(filterChain, never()).doFilter(any(), any());
+        verify(resolveTenantUseCase, never()).resolveActiveTenantId(anyString());
+        verify(roleTenancy, never()).isAllowed(anyString());
+    }
+
+    @Test
+    void shouldNormalizeLowercaseTenantCode() throws Exception {
+        stubRequest("/api/v1/orders", "acme");
+        authenticate("operator", "ROLE_ORDER_OPERATOR");
+        when(roleTenancy.isAllowed("ACME")).thenReturn(true);
+        when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenReturn(1L);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(tenantContextHolder).setTenantId(1L);
+        verify(filterChain).doFilter(request, response);
+    }
+
+    @Test
     void shouldReturn401WhenMissingHeader() throws Exception {
         stubRequest("/api/v1/orders", null);
         stubWriter();
@@ -157,10 +188,10 @@ class TenantContextFilterTest {
         stubRequest("/api/v1/orders", "EVIL_TENANT_XYZ");
         stubWriter();
         authenticate("operator", "ROLE_ORDER_OPERATOR");
-        when(userTenancy.isAllowed("operator", "EVIL_TENANT_XYZ")).thenReturn(true);
+        when(roleTenancy.isAllowed("EVIL_TENANT_XYZ")).thenReturn(true);
         when(resolveTenantUseCase.resolveActiveTenantId("EVIL_TENANT_XYZ"))
-                .thenThrow(new BusinessException("TENANT_NOT_FOUND",
-                        "Unknown or inactive tenant", HttpStatus.UNAUTHORIZED));
+                .thenThrow(new BusinessException("TENANT_ACCESS_DENIED",
+                        "Unknown or inactive tenant"));
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -168,7 +199,7 @@ class TenantContextFilterTest {
         verify(filterChain, never()).doFilter(any(), any());
         var body = ArgumentCaptor.forClass(ApiError.class);
         verify(objectMapper).writeValueAsString(body.capture());
-        assertEquals("TENANT_NOT_FOUND", body.getValue().code());
+        assertEquals("TENANT_ACCESS_DENIED", body.getValue().code());
         assertFalse(body.getValue().message().contains("EVIL_TENANT_XYZ"),
                 "L5: raw header must not be echoed in the body");
     }
@@ -178,7 +209,7 @@ class TenantContextFilterTest {
         stubRequest("/api/v1/orders", "ACME");
         stubWriter();
         authenticate("operator", "ROLE_ORDER_OPERATOR");
-        when(userTenancy.isAllowed("operator", "ACME")).thenReturn(true);
+        when(roleTenancy.isAllowed("ACME")).thenReturn(true);
         when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenThrow(new RuntimeException("DB down"));
 
         filter.doFilterInternal(request, response, filterChain);
@@ -281,10 +312,10 @@ class TenantContextFilterTest {
     @Test
     void shouldClearRealContextWhenChainThrows() throws Exception {
         var realContext = new com.enterpriseorders.backend.tenant.TenantContext();
-        var realFilter = new TenantContextFilter(resolveTenantUseCase, realContext, userTenancy, objectMapper);
+        var realFilter = new TenantContextFilter(resolveTenantUseCase, realContext, roleTenancy, objectMapper);
         stubRequest("/api/v1/orders", "ACME");
         authenticate("operator", "ROLE_ORDER_OPERATOR");
-        when(userTenancy.isAllowed("operator", "ACME")).thenReturn(true);
+        when(roleTenancy.isAllowed("ACME")).thenReturn(true);
         when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenReturn(1L);
         doThrow(new RuntimeException("downstream failure")).when(filterChain).doFilter(request, response);
 

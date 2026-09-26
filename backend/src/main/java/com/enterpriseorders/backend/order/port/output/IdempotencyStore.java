@@ -7,11 +7,15 @@ public interface IdempotencyStore {
     boolean insertPending(Long tenantId, String idempotencyKey, String operation, Long aggregateId);
 
     /**
-     * Flips the record to COMPLETED and stores the serialized response.
+     * Flips the record to COMPLETED, backfills the real aggregate id and
+     * stores the serialized response. The aggregate backfill matters for
+     * CREATE_ORDER: the PENDING row carries the 0 sentinel (the order does
+     * not exist yet), so completion must persist the created order's id —
+     * otherwise a later payload-less replay cannot fall back to findById.
      * Returns the number of updated rows; callers must treat anything
      * other than 1 as a failure (never a silent success).
      */
-    int markCompleted(Long tenantId, String idempotencyKey, String responsePayload);
+    int markCompleted(Long tenantId, String idempotencyKey, Long aggregateId, String responsePayload);
 
     record IdempotencyRecord(Long aggregateId, String operation, String status, String responsePayload) {}
 }

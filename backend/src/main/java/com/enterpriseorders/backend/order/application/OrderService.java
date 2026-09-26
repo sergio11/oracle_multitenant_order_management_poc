@@ -12,11 +12,11 @@ import com.enterpriseorders.backend.order.port.input.GetOrderQuery;
 import com.enterpriseorders.backend.order.port.input.RegisterPaymentUseCase;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextProvider;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Objects;
 
 @Service
 public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
@@ -44,12 +44,25 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     @Transactional
     public OrderView createOrder(Long customerId, String currency, String idempotencyKey) {
         Long tenantId = currentTenantId();
-        return idempotentExecutor.execute(tenantId, idempotencyKey, "CREATE_ORDER",
+        OrderView result = idempotentExecutor.execute(tenantId, idempotencyKey, "CREATE_ORDER",
                 CREATE_AGGREGATE_ID,
             () -> {
                 Long orderId = orderRepository.create(tenantId, customerId, currency);
                 return orderRepository.findById(tenantId, orderId);
             });
+        // FR-014 request fingerprint: CREATE_ORDER binds the key to the 0
+        // sentinel aggregate (the order does not exist yet), so a reused key
+        // with DIFFERENT params would otherwise replay the first order
+        // unchanged. Fresh executions and same-param replays always echo the
+        // request params; anything else is key misuse -> 409, never a silent
+        // wrong-order response.
+        if (idempotencyKey != null && !idempotencyKey.isBlank()
+                && (!Objects.equals(result.customerId(), customerId)
+                        || !Objects.equals(result.currency(), currency))) {
+            throw new BusinessException("IDEMPOTENCY_KEY_CONFLICT",
+                    "Idempotency key was already used to create a different order; it cannot be reused");
+        }
+        return result;
     }
 
     @Transactional
@@ -59,7 +72,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
         OrderStatus status = OrderStatus.fromString(current.status());
         if (status != OrderStatus.DRAFT && status != OrderStatus.PENDING) {
             throw new BusinessException("ORDER_NOT_DRAFT",
-                    "Cannot add lines to a non-DRAFT/PENDING order", HttpStatus.BAD_REQUEST);
+                    "Cannot add lines to a non-DRAFT/PENDING order");
         }
         orderRepository.addLine(tenantId, orderId, productId, quantity);
         return orderRepository.findById(tenantId, orderId);
@@ -74,7 +87,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                 OrderStatus status = OrderStatus.fromString(current.status());
                 if (status != OrderStatus.PENDING) {
                     throw new BusinessException("ORDER_NOT_CONFIRMABLE",
-                            "Order cannot be confirmed from current status", HttpStatus.BAD_REQUEST);
+                            "Order cannot be confirmed from current status");
                 }
                 orderRepository.confirm(tenantId, orderId, executionContext.actor(),
                         executionContext.correlationId());
@@ -87,7 +100,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
         Long tenantId = currentTenantId();
         if (reason == null || reason.isBlank()) {
             throw new BusinessException("CANCEL_REASON_REQUIRED",
-                    "Cancellation reason is required", HttpStatus.BAD_REQUEST);
+                    "Cancellation reason is required");
         }
         return idempotentExecutor.execute(tenantId, idempotencyKey, "CANCEL_ORDER", orderId,
             () -> {
@@ -95,11 +108,11 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                 OrderStatus status = OrderStatus.fromString(current.status());
                 if (status == OrderStatus.SHIPPED) {
                     throw new BusinessException("ORDER_SHIPPED_NOT_CANCELLABLE",
-                            "Cannot cancel a shipped order", HttpStatus.CONFLICT);
+                            "Cannot cancel a shipped order");
                 }
                 if (status == OrderStatus.COMPLETED || status == OrderStatus.CANCELLED) {
                     throw new BusinessException("ORDER_NOT_CANCELLABLE",
-                            "Order cannot be cancelled from current status", HttpStatus.BAD_REQUEST);
+                            "Order cannot be cancelled from current status");
                 }
                 orderRepository.cancel(tenantId, orderId, reason, executionContext.actor(),
                         executionContext.correlationId());
@@ -119,7 +132,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                 if (status != OrderStatus.CONFIRMED && status != OrderStatus.ALLOCATED
                         && status != OrderStatus.PAID) {
                     throw new BusinessException("PAYMENT_STATE_INVALID",
-                            "Payment requires order CONFIRMED or later", HttpStatus.BAD_REQUEST);
+                            "Payment requires order CONFIRMED or later");
                 }
                 orderRepository.registerPayment(tenantId, orderId, paymentRef, amount, currency,
                     paymentMethod, executionContext.actor(), executionContext.correlationId());
@@ -137,7 +150,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
         Long tenantId = tenantContext.getTenantId();
         if (tenantId == null) {
             throw new BusinessException("TENANT_CONTEXT_MISSING",
-                    "Tenant context not set", HttpStatus.SERVICE_UNAVAILABLE);
+                    "Tenant context not set");
         }
         return tenantId;
     }

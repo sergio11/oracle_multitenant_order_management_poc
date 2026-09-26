@@ -16,7 +16,7 @@ import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
-import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
+import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import com.enterpriseorders.backend.web.filter.CorrelationFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -73,7 +73,7 @@ class SecurityMatrixTest {
     @MockBean private GetOrderQuery getOrderQuery;
     @MockBean private ResolveTenantUseCase resolveTenantUseCase;
     @MockBean private TenantContextHolder tenantContextHolder;
-    @MockBean private UserTenancy userTenancy;
+    @MockBean private RoleTenancy roleTenancy;
 
     @Test
     void unauthenticatedRequestReturns401() throws Exception {
@@ -106,7 +106,7 @@ class SecurityMatrixTest {
     @Test
     @WithMockUser(username = "operator", roles = "ORDER_OPERATOR")
     void operatorWithDisallowedTenantGets403() throws Exception {
-        when(userTenancy.isAllowed("operator", "OTHER")).thenReturn(false);
+        when(roleTenancy.isAllowed("OTHER")).thenReturn(false);
         mockMvc.perform(get("/api/v1/orders/1")
                         .header("X-Tenant-ID", "OTHER")
                         .header("X-Correlation-ID", "corr-disallowed-1"))
@@ -119,7 +119,7 @@ class SecurityMatrixTest {
     @Test
     @WithMockUser(username = "operator", roles = "ORDER_OPERATOR")
     void operatorWithAllowedTenantPasses() throws Exception {
-        when(userTenancy.isAllowed("operator", "ACME")).thenReturn(true);
+        when(roleTenancy.isAllowed("ACME")).thenReturn(true);
         when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenReturn(1L);
         when(getOrderQuery.getOrder(1L)).thenReturn(
                 new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of()));
