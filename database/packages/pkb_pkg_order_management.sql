@@ -92,6 +92,16 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
          WHERE order_id = p_order_id
            AND tenant_id = p_tenant_id;
 
+        -- Guard (L8): SQL%ROWCOUNT = 0 means the order row was not
+        -- found for this tenant (deleted, or a concurrent change the
+        -- optimistic version could not see). Never write history/audit
+        -- for a transition that did not happen.
+        IF SQL%ROWCOUNT = 0 THEN
+            RAISE_APPLICATION_ERROR(-20038,
+                'Status transition failed: order ' || p_order_id ||
+                ' not found or modified concurrently');
+        END IF;
+
         -- Status history (SRS 25, BR-009)
         INSERT INTO order_status_history (
             tenant_id, order_id, old_status, new_status, changed_by, reason
@@ -107,7 +117,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             p_action         => 'STATUS_' || p_new_status,
             p_actor          => p_actor,
             p_correlation_id => p_correlation,
-            p_payload        => '{"from":"' || p_old_status || '","to":"' || p_new_status || '"}'
+            p_payload        => JSON_OBJECT(
+                                    KEY 'from' VALUE p_old_status,
+                                    KEY 'to'   VALUE p_new_status)
         );
     END transition_status;
 
@@ -177,6 +189,13 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         v_line_total NUMBER(18,2);
         v_order_status VARCHAR2(20);
     BEGIN
+        -- Explicit quantity guard (L25): the DB constraints would only
+        -- surface as ORA-01400/ORA-02290, which the API maps to an
+        -- unknown-error 500 instead of a clean 400.
+        IF p_quantity IS NULL OR p_quantity <= 0 THEN
+            RAISE_APPLICATION_ERROR(-20036, 'Quantity must be greater than zero');
+        END IF;
+
         -- DRAFT and PENDING orders accept new lines (first line promotes
         -- DRAFT -> PENDING, subsequent lines may still be added before
         -- confirmation).
@@ -234,7 +253,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         v_customer_id NUMBER;
         v_line_count  NUMBER;
         CURSOR c_lines IS
-            SELECT product_id, quantity
+            SELECT order_line_id, product_id, quantity
               FROM sales_order_line
              WHERE order_id = p_order_id AND tenant_id = p_tenant_id
              ORDER BY product_id;
@@ -265,6 +284,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         -- Design decision: use the first active warehouse for the tenant
         -- rather than per-line warehouse. The p_warehouse_id parameter
         -- in add_order_line is reserved for future multi-warehouse support.
+        -- The resolution is persisted on every line
+        -- (sales_order_line.reserved_warehouse_id, V020) so cancel_order
+        -- releases from the SAME warehouse (M4).
         -- See SRS §37 for inventory reservation requirements.
         SELECT warehouse_id INTO v_warehouse_id
           FROM (
@@ -275,7 +297,10 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
           )
          WHERE ROWNUM = 1;
 
-        -- Reserve inventory for each line (atomic, locks rows)
+        -- Reserve inventory for each line (atomic, locks rows) and
+        -- record WHERE the stock was reserved: cancel_order releases
+        -- from the stored warehouse so a later change to the tenant's
+        -- warehouse set cannot strand the reservation (M4).
         FOR r IN c_lines LOOP
             pkg_inventory.reserve_stock(
                 p_tenant_id    => p_tenant_id,
@@ -283,6 +308,11 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
                 p_product_id   => r.product_id,
                 p_quantity     => r.quantity
             );
+
+            UPDATE sales_order_line
+               SET reserved_warehouse_id = v_warehouse_id
+             WHERE order_line_id = r.order_line_id
+               AND tenant_id     = p_tenant_id;
         END LOOP;
 
         -- Transition DRAFT -> PENDING -> CONFIRMED
@@ -295,13 +325,19 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             p_correlation => p_correlation_id
         );
 
-        -- Write outbox event (SRS 63) - SAME transaction
+        -- Write outbox event (SRS 63) - SAME transaction.
+        -- JSON_OBJECT instead of string concatenation (M6): values are
+        -- escaped per RFC 8259, so quotes/backslashes in the actor can
+        -- no longer corrupt the payload.
         write_outbox(
             p_tenant_id      => p_tenant_id,
             p_aggregate_type => 'SALES_ORDER',
             p_aggregate_id   => TO_CHAR(p_order_id),
             p_event_type     => 'ORDER_CONFIRMED',
-            p_payload        => '{"orderId":' || p_order_id || ',"customerId":' || v_customer_id || ',"actor":"' || p_actor || '"}'
+            p_payload        => JSON_OBJECT(
+                                    KEY 'orderId'    VALUE p_order_id,
+                                    KEY 'customerId' VALUE v_customer_id,
+                                    KEY 'actor'      VALUE p_actor)
         );
 
     EXCEPTION
@@ -322,7 +358,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         v_status VARCHAR2(20);
         v_warehouse_id NUMBER;
         CURSOR c_lines IS
-            SELECT product_id, quantity
+            SELECT product_id, quantity, reserved_warehouse_id
               FROM sales_order_line
              WHERE order_id = p_order_id AND tenant_id = p_tenant_id
              ORDER BY product_id;
@@ -355,20 +391,29 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
 
         -- If previously confirmed/allocated, release inventory.
         -- (SHIPPED is unreachable here - rejected above.)
+        -- M4 (V020): release from the warehouse stored on each line at
+        -- confirm time (sales_order_line.reserved_warehouse_id); the
+        -- legacy "first ACTIVE warehouse" resolution below runs ONLY as
+        -- a fallback for pre-V020 lines whose stored value IS NULL, and
+        -- then only once (lazily) for the whole cancel.
         IF v_status IN ('CONFIRMED','ALLOCATED','PAID') THEN
-            SELECT warehouse_id INTO v_warehouse_id
-              FROM (
-                SELECT warehouse_id
-                  FROM warehouse
-                 WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
-                 ORDER BY warehouse_id
-              )
-             WHERE ROWNUM = 1;
+            v_warehouse_id := NULL;
 
             FOR r IN c_lines LOOP
+                IF r.reserved_warehouse_id IS NULL AND v_warehouse_id IS NULL THEN
+                    SELECT warehouse_id INTO v_warehouse_id
+                      FROM (
+                        SELECT warehouse_id
+                          FROM warehouse
+                         WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
+                         ORDER BY warehouse_id
+                      )
+                     WHERE ROWNUM = 1;
+                END IF;
+
                 pkg_inventory.release_stock(
                     p_tenant_id    => p_tenant_id,
-                    p_warehouse_id => v_warehouse_id,
+                    p_warehouse_id => NVL(r.reserved_warehouse_id, v_warehouse_id),
                     p_product_id   => r.product_id,
                     p_quantity     => r.quantity
                 );
@@ -391,7 +436,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             p_aggregate_type => 'SALES_ORDER',
             p_aggregate_id   => TO_CHAR(p_order_id),
             p_event_type     => 'ORDER_CANCELLED',
-            p_payload        => '{"orderId":' || p_order_id || ',"reason":"' || NVL(p_reason,'') || '"}'
+            p_payload        => JSON_OBJECT(
+                                    KEY 'orderId' VALUE p_order_id,
+                                    KEY 'reason'  VALUE NVL(p_reason, ''))
         );
 
     EXCEPTION
@@ -414,6 +461,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
     ) IS
         v_status            VARCHAR2(20);
         v_order_currency    VARCHAR2(3);
+        v_total_amount      NUMBER(18,2);
         v_new_payment       BOOLEAN := FALSE;
         v_existing_amount   NUMBER(18,2);
         v_existing_currency VARCHAR2(3);
@@ -424,8 +472,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             RAISE_APPLICATION_ERROR(-20032, 'Payment amount must be positive');
         END IF;
 
-        -- Lock the order row (also used for the currency check below)
-        SELECT status, currency INTO v_status, v_order_currency
+        -- Lock the order row (also used for the currency/total checks below)
+        SELECT status, currency, total_amount
+          INTO v_status, v_order_currency, v_total_amount
           FROM sales_order
          WHERE order_id = p_order_id AND tenant_id = p_tenant_id
            FOR UPDATE;
@@ -483,6 +532,16 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
                 END IF;
         END;
 
+        -- BR: payment amount must equal the order total (-20035).
+        -- Placed AFTER the idempotent-retry early return above, so an
+        -- identical retry on an already-PAID order stays a no-op success
+        -- and never hits this check; a NEW payment with a mismatched
+        -- amount is rejected here (its stray INSERT rolls back with the
+        -- caller transaction).
+        IF p_amount <> v_total_amount THEN
+            RAISE_APPLICATION_ERROR(-20035, 'Payment amount does not match order total');
+        END IF;
+
         -- A NEW payment on an already-PAID order is a genuine double pay
         -- (the idempotent path above returns early).
         IF v_new_payment AND v_status = 'PAID' THEN
@@ -504,7 +563,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
             p_aggregate_type => 'SALES_ORDER',
             p_aggregate_id   => TO_CHAR(p_order_id),
             p_event_type     => 'ORDER_PAID',
-            p_payload        => '{"orderId":' || p_order_id || ',"ref":"' || p_payment_ref || '"}'
+            p_payload        => JSON_OBJECT(
+                                    KEY 'orderId' VALUE p_order_id,
+                                    KEY 'ref'     VALUE p_payment_ref)
         );
 
     EXCEPTION
@@ -516,5 +577,5 @@ END pkg_order_management;
 /
 
 -- Grant execute to runtime user (least privilege, SRS 58/59)
+-- NOTE (C2): app_reporting is read-only - no EXECUTE here (see V019).
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
-GRANT EXECUTE ON pkg_order_management TO app_reporting;

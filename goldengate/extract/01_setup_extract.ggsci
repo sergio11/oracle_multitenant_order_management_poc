@@ -1,0 +1,29 @@
+--=====================================================================
+-- GoldenGate Extract setup (run on SOURCE GGSCI host, SRS §2, §96)
+--
+-- Registers the Extract group, the local trail, and the checkpoint
+-- table used to guarantee at-least-once delivery across restarts in
+-- the enterprise DR/replication architecture.
+--
+-- NOTE: ILLUSTRATIVE GGSCI COMMANDS - not executed in the local lab
+-- (no GoldenGate installation); see goldengate/docs/README.md.
+-- Commands are typed at the GGSCI prompt (not run in SQL*Plus).
+--=====================================================================
+
+-- 1) Create the checkpoint (consistent) table in the source CDB/PDB
+ADD CHECKPOINT TABLE gg_owner.ggs_checkpoint,
+    CREATE,
+    TABLESPACE users
+
+-- 2) Register the Extract group against the source transaction log,
+--    starting from the current position
+ADD EXTRACT ext_oltp, TRANLOG, BEGIN NOW
+
+-- 3) Attach a LOCAL trail file (write path on the source host)
+ADD EXTTRAIL /u01/ggate/dirdat/lt, EXTRACT EXT_OLTP
+
+-- 4) Start extraction from current point (initial load handled
+--    separately). Parameter file: dirprm/ext_oltp.prm
+START EXTRACT EXT_OLTP
+
+INFO EXTRACT *

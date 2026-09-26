@@ -1,0 +1,12 @@
+-- rman_full_backup.rcv — full DB + archivelog backup (CDB/PDB_OLTP).
+-- Usage: rman target / @rman_full_backup.rcv
+-- NOT executed live in this lab.
+RUN {
+  ALLOCATE CHANNEL c1 DEVICE TYPE DISK FORMAT '/backup/%d_%T_%s_%p.bkp';
+  ALLOCATE CHANNEL c2 DEVICE TYPE DISK FORMAT '/backup/%d_%T_%s_%p.bkp';
+  BACKUP INCREMENTAL LEVEL 0 DATABASE PLUS ARCHIVELOG TAG 'POC_FULL';
+  BACKUP CURRENT CONTROLFILE TAG 'POC_CTL';
+  BACKUP SPFILE TAG 'POC_SPFILE';
+  DELETE NOPROMPT OBSOLETE RECOVERY WINDOW OF 7 DAYS;
+  CROSSCHECK BACKUP;
+}

@@ -166,5 +166,5 @@ END pkg_inventory;
 /
 
 -- Grant execute to runtime user (least privilege, SRS 58/59)
+-- NOTE (C2): app_reporting is read-only - no EXECUTE here (see V019).
 GRANT EXECUTE ON pkg_inventory TO app_runtime;
-GRANT EXECUTE ON pkg_inventory TO app_reporting;

@@ -30,14 +30,23 @@ oracle:
     max-pool-size: 20
     connection-wait-timeout: 30
     inactive-connection-timeout: 300
+    abandoned-connection-timeout: 60
+    connection-validation-timeout: 10
     validate-connection-on-borrow: true
 
 app:
+  reporting:
+    # Seconds between MV refreshes (single-JVM; see RefreshRateLimiter).
+    refresh-cooldown-seconds: 60
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD:changeme}
     operator:
       password: ${APP_OPERATOR_PASSWORD:changeme}
+    tenancy:
+      # C4: non-admin users are bound to these tenant codes (comma separated).
+      # ROLE_ADMIN may access any tenant (enforced in TenantContextFilter).
+      operator-allowed-tenants: ${APP_OPERATOR_TENANTS:ACME}
 
 management:
   endpoints:

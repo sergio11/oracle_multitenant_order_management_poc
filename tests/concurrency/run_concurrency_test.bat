@@ -12,17 +12,54 @@ REM Connection defaults match infrastructure/podman/.env.example.
 REM =====================================================================
 setlocal enabledelayedexpansion
 
-if not defined DB_USER set DB_USER=app_runtime
-if not defined DB_PASS set DB_PASS=LabRuntimePass1
-if not defined DB_CONN set DB_CONN=%DB_USER%/%DB_PASS%@//localhost:1521/pdb_oltp
-if not defined DB_OWNER_USER set DB_OWNER_USER=app_owner
-if not defined DB_OWNER_PASS set DB_OWNER_PASS=LabOwnerPass1
-if not defined DB_OWNER_CONN set DB_OWNER_CONN=%DB_OWNER_USER%/%DB_OWNER_PASS%@//localhost:1521/pdb_oltp
+set DB_USER_SRC=set
+set DB_PASS_SRC=set
+set DB_CONN_SRC=set
+set DB_OWNER_USER_SRC=set
+set DB_OWNER_PASS_SRC=set
+set DB_OWNER_CONN_SRC=set
+if not defined DB_USER (set "DB_USER=app_runtime" & set "DB_USER_SRC=defaulted")
+if not defined DB_PASS (set "DB_PASS=LabRuntimePass1" & set "DB_PASS_SRC=defaulted")
+if not defined DB_CONN (set "DB_CONN=!DB_USER!/!DB_PASS!@//localhost:1521/pdb_oltp" & set "DB_CONN_SRC=defaulted")
+if not defined DB_OWNER_USER (set "DB_OWNER_USER=app_owner" & set "DB_OWNER_USER_SRC=defaulted")
+if not defined DB_OWNER_PASS (set "DB_OWNER_PASS=LabOwnerPass1" & set "DB_OWNER_PASS_SRC=defaulted")
+if not defined DB_OWNER_CONN (set "DB_OWNER_CONN=!DB_OWNER_USER!/!DB_OWNER_PASS!@//localhost:1521/pdb_oltp" & set "DB_OWNER_CONN_SRC=defaulted")
 if not defined TENANT_ID set TENANT_ID=1
 if not defined CUSTOMER_ID set CUSTOMER_ID=1
 if not defined PRODUCT_ID set PRODUCT_ID=1
 if not defined WAREHOUSE_ID set WAREHOUSE_ID=1
 if not defined WORKERS set WORKERS=5
+
+REM Warn when any DB_* connection var fell back to its default (passwords redacted).
+set "DEFAULTED_DB_VARS="
+if "!DB_USER_SRC!"=="defaulted" set "DEFAULTED_DB_VARS=!DEFAULTED_DB_VARS! DB_USER"
+if "!DB_PASS_SRC!"=="defaulted" set "DEFAULTED_DB_VARS=!DEFAULTED_DB_VARS! DB_PASS"
+if "!DB_CONN_SRC!"=="defaulted" set "DEFAULTED_DB_VARS=!DEFAULTED_DB_VARS! DB_CONN"
+if "!DB_OWNER_USER_SRC!"=="defaulted" set "DEFAULTED_DB_VARS=!DEFAULTED_DB_VARS! DB_OWNER_USER"
+if "!DB_OWNER_PASS_SRC!"=="defaulted" set "DEFAULTED_DB_VARS=!DEFAULTED_DB_VARS! DB_OWNER_PASS"
+if "!DB_OWNER_CONN_SRC!"=="defaulted" set "DEFAULTED_DB_VARS=!DEFAULTED_DB_VARS! DB_OWNER_CONN"
+if defined DEFAULTED_DB_VARS (
+  echo =============================================================
+  echo WARNING: using DEFAULT DB connection values for:!DEFAULTED_DB_VARS!
+  echo WARNING: set DB_USER/DB_PASS/DB_CONN/DB_OWNER_USER/DB_OWNER_PASS/DB_OWNER_CONN explicitly for non-local runs.
+  echo DB_USER=!DB_USER! [!DB_USER_SRC!]
+  echo DB_PASS=^<!DB_PASS_SRC!^>
+  echo DB_CONN=^<!DB_CONN_SRC!^>
+  echo DB_OWNER_USER=!DB_OWNER_USER! [!DB_OWNER_USER_SRC!]
+  echo DB_OWNER_PASS=^<!DB_OWNER_PASS_SRC!^>
+  echo DB_OWNER_CONN=^<!DB_OWNER_CONN_SRC!^>
+  echo =============================================================
+)
+
+REM Fail fast on empty required IDs after defaulting.
+if "!TENANT_ID!"=="" (echo ERROR: TENANT_ID is empty. Set TENANT_ID explicitly. & exit /b 1)
+if "!CUSTOMER_ID!"=="" (echo ERROR: CUSTOMER_ID is empty. Set CUSTOMER_ID explicitly. & exit /b 1)
+if "!PRODUCT_ID!"=="" (echo ERROR: PRODUCT_ID is empty. Set PRODUCT_ID explicitly. & exit /b 1)
+if "!WAREHOUSE_ID!"=="" (echo ERROR: WAREHOUSE_ID is empty. Set WAREHOUSE_ID explicitly. & exit /b 1)
+REM WORKERS has a default (5); validate it is a positive integer.
+echo !WORKERS!| findstr /R "^[0-9][0-9]*$" >nul
+if errorlevel 1 (echo ERROR: WORKERS must be a positive integer, got '!WORKERS!'. & exit /b 1)
+if !WORKERS! LSS 1 (echo ERROR: WORKERS must be ^>= 1, got '!WORKERS!'. & exit /b 1)
 
 set RESULTS_TBL=concurrency_results_%RANDOM%
 set TEST_RC=1

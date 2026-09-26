@@ -6,6 +6,7 @@ kind: Kustomization
 namespace: poc-qa
 resources:
   - namespace.yaml
+  - network-policies.yaml
   - oracle/statefulset.yaml
   - oracle/service.yaml
   - backend/deployment.yaml

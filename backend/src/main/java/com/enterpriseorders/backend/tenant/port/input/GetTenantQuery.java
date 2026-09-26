@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.tenant.port.input;
 
-import com.enterpriseorders.backend.tenant.dto.TenantResponse;
+import com.enterpriseorders.backend.tenant.model.TenantView;
 
 public interface GetTenantQuery {
-    TenantResponse getTenant(Long tenantId);
+    TenantView getTenant(Long tenantId);
 }

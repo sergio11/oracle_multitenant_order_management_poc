@@ -16,6 +16,19 @@ spec:
       labels:
         app: backend
     spec:
+      # Backend never talks to the Kubernetes API (no cloud-k8s clients).
+      automountServiceAccountToken: false
+      # Restricted-profile pod security context: numeric non-root matching
+      # the Dockerfile's `USER 65532:65532`, RuntimeDefault seccomp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Spring Boot exits cleanly on SIGTERM; 30s covers in-flight requests.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: backend
           # Built by `rake qa:image:build` and loaded by `rake qa:image:load`.
@@ -48,6 +61,17 @@ spec:
                 secretKeyRef:
                   name: poc-qa-secrets
                   key: APP_OPERATOR_PASSWORD
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # Only writable path: JVM/Tomcat/Multipart temp files
+            # (java.io.tmpdir=/tmp) - root FS stays read-only.
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 100m
@@ -59,6 +83,16 @@ spec:
           # the DB indicator -> pod goes Unready (not restarted) on DB
           # outage (FT-001). Liveness is app-only -> a DB outage must NOT
           # restart the pod (restart fixes nothing and drops warmup).
+          # startupProbe uses the app-only liveness endpoint with a
+          # generous budget so a slow first boot (JVM + class load, Oracle
+          # still coming up) is not killed before liveness/readiness start.
+          startupProbe:
+            httpGet:
+              path: /internal/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /internal/health/readiness
@@ -73,3 +107,6 @@ spec:
             initialDelaySeconds: 40
             periodSeconds: 30
             failureThreshold: 6
+      volumes:
+        - name: tmp
+          emptyDir: {}

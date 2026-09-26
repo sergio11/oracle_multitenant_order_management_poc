@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.order.port.input;
 
-import com.enterpriseorders.backend.order.dto.OrderResponse;
+import com.enterpriseorders.backend.order.model.OrderView;
 
 public interface AddOrderLineUseCase {
-    OrderResponse addLine(Long orderId, Long productId, Long quantity, Long warehouseId);
+    OrderView addLine(Long orderId, Long productId, Long quantity);
 }

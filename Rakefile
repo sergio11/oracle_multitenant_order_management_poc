@@ -52,7 +52,11 @@ ORACLE_PORT  = ENV.fetch('QA_ORACLE_PORT', '1521')
 ORACLE_SID   = ENV.fetch('QA_ORACLE_SERVICE', 'pdb_oltp')
 SECRETS_NAME = 'poc-qa-secrets'
 
-# Lab defaults - keep in sync with infrastructure/podman/.env.example
+# LAB-ONLY defaults (documented demo credentials, never real secrets).
+# Fallback used only when infrastructure/podman/.env is absent (a warn
+# is printed). Keep in sync with .env.example AND with the DEFINE
+# defaults in scripts/01-init-db.sql (first boot must create the users
+# with these same values).
 DEFAULTS = {
   'ORACLE_PASSWORD'      => 'ChangeMe123!',
   'ORACLE_DATABASE'      => 'PDB_OLTP',
@@ -70,9 +74,21 @@ DEFAULTS = {
 # Helpers
 # -----------------------------------------------------------------------------
 
+# Strip credentials from anything we echo (console `$ ...` lines and
+# error messages): SQL*Plus connect strings `user/pass@host` become
+# `user/****@host` and `-Dflyway.password=...` becomes `****`.
+# NOTE: this only protects LOGS - the real argv still carries the secret
+# for the flyway password (Flyway only reads it as a system property).
+def redact(text)
+  text.to_s
+      .gsub(/([A-Za-z0-9_$.]+)\/([^\/\s@]+)@/, '\1/****@')
+      .gsub(/-Dflyway\.password=\S*/, '-Dflyway.password=****')
+end
+
 def run!(*args, chdir: nil)
   cmd = args.length == 1 ? args.first : args
-  puts "\n$ #{cmd.is_a?(Array) ? cmd.join(' ') : cmd}"
+  shown = redact(cmd.is_a?(Array) ? cmd.join(' ') : cmd)
+  puts "\n$ #{shown}"
   argv = cmd.is_a?(Array) ? cmd : [cmd]
   # NOTE: no kwargs splat - system(str, **{}) raises ArgumentError on Ruby/Windows.
   success = if chdir
@@ -83,16 +99,17 @@ def run!(*args, chdir: nil)
   return if success
 
   status = $CHILD_STATUS
-  abort "Command failed (#{status.nil? ? '?' : status.exitstatus}): #{cmd.is_a?(Array) ? cmd.join(' ') : cmd}"
+  abort "Command failed (#{status.nil? ? '?' : status.exitstatus}): #{shown}"
 end
 
 def capture!(*args, chdir: nil)
   cmd = args.length == 1 ? args.first : args
-  puts "\n$ #{cmd.is_a?(Array) ? cmd.join(' ') : cmd}"
+  shown = redact(cmd.is_a?(Array) ? cmd.join(' ') : cmd)
+  puts "\n$ #{shown}"
   opts = {}
   opts[:chdir] = chdir if chdir
   out = IO.popen(cmd, err: [:child, :out], **opts, &:read)
-  raise "Command failed: #{cmd.is_a?(Array) ? cmd.join(' ') : cmd}\n#{out}" unless $CHILD_STATUS.success?
+  raise "Command failed: #{shown}\n#{out}" unless $CHILD_STATUS.success?
 
   out
 end
@@ -143,7 +160,12 @@ def ensure_cluster!
   abort "kind cluster '#{CLUSTER_NAME}' does not exist. Run: rake qa:cluster:create" unless cluster_exists?
 end
 
+# Create/refresh the QA Secret without putting any value on a command
+# line (`kubectl create secret --from-literal=k=v` is visible in `ps`
+# and in our own `$ ...` echo). Values go into a 0600 Tempfile consumed
+# via --from-env-file; the file is always unlinked in ensure.
 def ensure_secret!
+  require 'tempfile'
   env = load_env_file
   data = {
     'ORACLE_PASSWORD'       => env['ORACLE_PASSWORD'],
@@ -153,11 +175,20 @@ def ensure_secret!
     'APP_ADMIN_PASSWORD'    => env['APP_ADMIN_PASSWORD'],
     'APP_OPERATOR_PASSWORD' => env['APP_OPERATOR_PASSWORD']
   }
-  args = ['create', 'secret', 'generic', SECRETS_NAME, '-n', NAMESPACE]
-  data.each { |k, v| args << "--from-literal=#{k}=#{v}" }
-  args += ['--dry-run=client', '-o', 'yaml']
-  yaml = capture!('kubectl', *args)
-  kubectl('apply', '-f', '-', input: yaml)
+  file = Tempfile.new(['poc-qa-secrets', '.env'])
+  begin
+    file.chmod(0o600)
+    data.each { |k, v| file.write("#{k}=#{v}\n") }
+    file.flush
+    file.close
+    args = ['create', 'secret', 'generic', SECRETS_NAME, '-n', NAMESPACE,
+            "--from-env-file=#{file.path}", '--dry-run=client', '-o', 'yaml']
+    yaml = capture!('kubectl', *args)
+    kubectl('apply', '-f', '-', input: yaml)
+  ensure
+    file.close unless file.closed?
+    file.unlink
+  end
 end
 
 def ensure_init_configmap!
@@ -243,13 +274,26 @@ def mvn_cmd
   end
 end
 
+# Flyway password for -Dflyway.password: ENV['FLYWAY_PASSWORD'] first
+# (kept out of the .env file and never printed), lab .env/DEFAULTS as
+# fallback so existing bring-up keeps working. The value is still part
+# of the mvn argv (Flyway only accepts it as a system property), so it
+# is redacted from our own output but remains visible in `ps` for the
+# duration of the mvn run - documented residual in the QA report.
+def flyway_password
+  pwd = ENV['FLYWAY_PASSWORD'].to_s
+  pwd = load_env_file['APP_OWNER_PWD'].to_s if pwd.empty?
+  abort 'No Flyway password: set FLYWAY_PASSWORD or APP_OWNER_PWD (infrastructure/podman/.env).' if pwd.empty?
+
+  pwd
+end
+
 def flyway_migrate!
-  env = load_env_file
   url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
   run!(mvn_cmd, '-q', 'flyway:migrate',
        "-Dflyway.url=#{url}",
        '-Dflyway.user=APP_OWNER',
-       "-Dflyway.password=#{env['APP_OWNER_PWD']}",
+       "-Dflyway.password=#{flyway_password}",
        chdir: BACKEND_DIR)
 end
 
@@ -281,7 +325,7 @@ def sql_via_pod!(stdin_text, user, pass, label)
   conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
   cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, oracle_pod!,
          '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)}"]
-  puts "\n$ #{cmd.join(' ')}  # via in-pod sqlplus (#{label})"
+  puts "\n$ #{redact(cmd.join(' '))}  # via in-pod sqlplus (#{label})"
   out = IO.popen(cmd, 'r+') do |io|
     io.write(stdin_text)
     io.close_write
@@ -501,17 +545,16 @@ namespace :qa do
     desc 'Repair Flyway schema history (removes FAILED entries after fixing cause)'
     task :repair do
       ensure_cluster!
-      env = load_env_file
       url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
       run!(mvn_cmd, '-q', 'flyway:repair',
            "-Dflyway.url=#{url}",
            '-Dflyway.user=APP_OWNER',
-           "-Dflyway.password=#{env['APP_OWNER_PWD']}",
+           "-Dflyway.password=#{flyway_password}",
            chdir: BACKEND_DIR)
       puts 'Flyway repair OK.'
     end
 
-    desc 'Run Flyway migrations (V001-V017) against Oracle NodePort :1521'
+    desc 'Run Flyway migrations (V001-V022) against Oracle NodePort :1521'
     task :migrate do
       ensure_cluster!
       puts 'Waiting for Oracle before migrate...'
@@ -734,18 +777,11 @@ namespace :qa do
       check.call('Idempotency-Key conflict -> 409', false, e.message)
     end
 
-    # 5) Tenant isolation: GLOBEX must not see ACME-shaped private payload errors
-    begin
-      res = http_get("#{BACKEND_URL}/api/v1/reports/orders/daily",
-                     user: operator,
-                     headers: { 'X-Tenant-ID' => 'GLOBEX' })
-      # 200 with own data or 403 - both acceptable; 500 is not.
-      check.call('GET reports (GLOBEX tenant)', res.code.to_i != 500, "HTTP #{res.code}")
-    rescue StandardError => e
-      check.call('GET reports (GLOBEX tenant)', false, e.message)
-    end
-
-    # 5b) MV refresh (ADMIN only) - exercises refresh_reporting_views (V018)
+    # 5) MV refresh (ADMIN only) - exercises refresh_reporting_views (V018).
+    #    Runs BEFORE the isolation check below: the reporting MVs are
+    #    REFRESH COMPLETE ON DEMAND, so without a refresh both tenants
+    #    would legitimately return [] and any isolation assertion on the
+    #    payload would be vacuous on a fresh cluster.
     begin
       res = http_post("#{BACKEND_URL}/api/v1/reports/refresh", '{}',
                       user: admin,
@@ -756,7 +792,65 @@ namespace :qa do
       check.call('POST /reports/refresh (admin)', false, e.message)
     end
 
-    # 6) Admin-only endpoint rejects operator
+    # 6) Tenant isolation - real cross-tenant assertions (two probes):
+    #    a) the ACME order created in step 3 MUST be readable as ACME
+    #       (200) and MUST NOT be readable as GLOBEX (404 = "no such
+    #       order for this tenant"; 200 would be a leak);
+    #    b) GET /reports/orders/daily twice, ACME vs GLOBEX: both 200,
+    #       each body holds rows of exactly ONE distinct tenantId
+    #       (OrderDailySummary carries tenantId), the two tenantIds
+    #       differ, and the two bodies differ.
+    #    The old check only asserted "not 500", so a leak answering 200
+    #    with the other tenant's rows passed. Kept as ONE check to keep
+    #    the documented "8 API checks" contract; the detail string lists
+    #    every failed sub-condition.
+    begin
+      problems = []
+      if order_id
+        own   = http_get("#{BACKEND_URL}/api/v1/orders/#{order_id}",
+                         user: operator, headers: { 'X-Tenant-ID' => 'ACME' })
+        cross = http_get("#{BACKEND_URL}/api/v1/orders/#{order_id}",
+                         user: operator, headers: { 'X-Tenant-ID' => 'GLOBEX' })
+        problems << "ACME GET own order HTTP #{own.code} (want 200)" unless own.code.to_i == 200
+        unless cross.code.to_i == 404
+          problems << "GLOBEX GET ACME order HTTP #{cross.code} (want 404 - cross-tenant leak?)"
+        end
+      else
+        problems << 'order probe skipped (no order created in step 3)'
+      end
+
+      fetch_daily = lambda do |tenant|
+        http_get("#{BACKEND_URL}/api/v1/reports/orders/daily",
+                 user: operator,
+                 headers: { 'X-Tenant-ID' => tenant })
+      end
+      r_acme   = fetch_daily.call('ACME')
+      r_globex = fetch_daily.call('GLOBEX')
+      if r_acme.code.to_i == 200 && r_globex.code.to_i == 200
+        tenant_ids = lambda do |res|
+          JSON.parse(res.body).map { |row| row['tenantId'] }.compact.uniq
+        end
+        acme_ids   = tenant_ids.call(r_acme)
+        globex_ids = tenant_ids.call(r_globex)
+        unless acme_ids.size == 1 && globex_ids.size == 1 && acme_ids != globex_ids
+          problems << "report rows not tenant-scoped (ACME tenantIds=#{acme_ids.inspect}, " \
+                      "GLOBEX tenantIds=#{globex_ids.inspect})"
+        end
+        if r_acme.body.empty? || r_globex.body.empty? || r_acme.body == r_globex.body
+          problems << "report bodies empty or identical (seed/refresh must give both tenants rows): " \
+                      "ACME=#{r_acme.body[0, 120].inspect} GLOBEX=#{r_globex.body[0, 120].inspect}"
+        end
+      else
+        problems << "GET reports HTTP ACME=#{r_acme.code} GLOBEX=#{r_globex.code} (want 200/200)"
+      end
+
+      check.call('Tenant isolation (ACME vs GLOBEX)', problems.empty?,
+                 problems.empty? ? nil : problems.join('; '))
+    rescue StandardError => e
+      check.call('Tenant isolation (ACME vs GLOBEX)', false, e.message)
+    end
+
+    # 7) Admin-only endpoint rejects operator
     begin
       res = http_post("#{BACKEND_URL}/api/v1/tenants",
                       '{"tenantCode":"QA_T","name":"QA Tenant"}',
@@ -768,7 +862,7 @@ namespace :qa do
       check.call('POST /tenants as operator -> 401/403', false, e.message)
     end
 
-    # 7) Actuator metrics reachable (management base-path /internal)
+    # 8) Actuator metrics reachable (management base-path /internal)
     begin
       res = http_get("#{BACKEND_URL}/internal/health")
       check.call('Health body present', !res.body.to_s.empty?, res.body.to_s[0, 80])

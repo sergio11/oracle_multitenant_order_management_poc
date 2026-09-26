@@ -69,6 +69,111 @@ BEGIN
 END;
 /
 
+-- Cross-tenant reads on order/payment/inventory tables, direction A:
+-- tenant 1 session must see zero rows of tenant 2 (SRS 14, BR-013)
+EXEC pkg_tenant.set_tenant_context(1);
+DECLARE
+    v_own   NUMBER;
+    v_cross NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_own FROM sales_order;
+    SELECT COUNT(*) INTO v_cross FROM sales_order WHERE tenant_id = 2;
+    DBMS_OUTPUT.PUT_LINE('T1 sales_order own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        RAISE_APPLICATION_ERROR(-20917,
+            'False pass: tenant 1 sees 0 sales_order rows (seed not applied?)');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 sales_order rows!');
+    END IF;
+
+    SELECT COUNT(*) INTO v_own FROM sales_order_line;
+    SELECT COUNT(*) INTO v_cross FROM sales_order_line WHERE tenant_id = 2;
+    DBMS_OUTPUT.PUT_LINE('T1 sales_order_line own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        RAISE_APPLICATION_ERROR(-20917,
+            'False pass: tenant 1 sees 0 sales_order_line rows (seed not applied?)');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 sales_order_line rows!');
+    END IF;
+
+    SELECT COUNT(*) INTO v_own FROM inventory;
+    SELECT COUNT(*) INTO v_cross FROM inventory WHERE tenant_id = 2;
+    DBMS_OUTPUT.PUT_LINE('T1 inventory own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        RAISE_APPLICATION_ERROR(-20917,
+            'False pass: tenant 1 sees 0 inventory rows (seed not applied?)');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 inventory rows!');
+    END IF;
+
+    -- Payment has no seed rows: a zero own-count is expected, not a
+    -- false pass - the cross-tenant assertion below still must hold.
+    SELECT COUNT(*) INTO v_own FROM payment;
+    SELECT COUNT(*) INTO v_cross FROM payment WHERE tenant_id = 2;
+    DBMS_OUTPUT.PUT_LINE('T1 payment own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        DBMS_OUTPUT.PUT_LINE('NOTE: tenant 1 has no payment rows - leak check is vacuous for payment here');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 payment rows!');
+    END IF;
+END;
+/
+
+-- Same checks in the other direction (tenant 2 must see zero of tenant 1)
+EXEC pkg_tenant.set_tenant_context(2);
+DECLARE
+    v_own   NUMBER;
+    v_cross NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_own FROM sales_order;
+    SELECT COUNT(*) INTO v_cross FROM sales_order WHERE tenant_id = 1;
+    DBMS_OUTPUT.PUT_LINE('T2 sales_order own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        RAISE_APPLICATION_ERROR(-20917,
+            'False pass: tenant 2 sees 0 sales_order rows (seed not applied?)');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 sales_order rows!');
+    END IF;
+
+    SELECT COUNT(*) INTO v_own FROM sales_order_line;
+    SELECT COUNT(*) INTO v_cross FROM sales_order_line WHERE tenant_id = 1;
+    DBMS_OUTPUT.PUT_LINE('T2 sales_order_line own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        RAISE_APPLICATION_ERROR(-20917,
+            'False pass: tenant 2 sees 0 sales_order_line rows (seed not applied?)');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 sales_order_line rows!');
+    END IF;
+
+    SELECT COUNT(*) INTO v_own FROM inventory;
+    SELECT COUNT(*) INTO v_cross FROM inventory WHERE tenant_id = 1;
+    DBMS_OUTPUT.PUT_LINE('T2 inventory own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        RAISE_APPLICATION_ERROR(-20917,
+            'False pass: tenant 2 sees 0 inventory rows (seed not applied?)');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 inventory rows!');
+    END IF;
+
+    SELECT COUNT(*) INTO v_own FROM payment;
+    SELECT COUNT(*) INTO v_cross FROM payment WHERE tenant_id = 1;
+    DBMS_OUTPUT.PUT_LINE('T2 payment own=' || v_own || ' cross=' || v_cross);
+    IF v_own = 0 THEN
+        DBMS_OUTPUT.PUT_LINE('NOTE: tenant 2 has no payment rows - leak check is vacuous for payment here');
+    END IF;
+    IF v_cross > 0 THEN
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 payment rows!');
+    END IF;
+END;
+/
+
 -- Without any context (fail-closed, SRS 13): zero rows everywhere
 EXEC pkg_tenant.clear_tenant_context;
 DECLARE
@@ -105,6 +210,68 @@ BEGIN
     IF v_inserted THEN
         ROLLBACK;
         RAISE_APPLICATION_ERROR(-20914, 'VPD allowed INSERT with no tenant context!');
+    END IF;
+END;
+/
+
+-- UPDATE / DELETE without tenant context must touch 0 rows (fail-closed
+-- VPD predicate 1=0) or be rejected outright (ORA-28104 / ORA-01031 when
+-- the direct DML privilege is missing - both are acceptable rejections).
+-- NOTE: dynamic SQL on purpose (same reason as the INSERT case above);
+-- anything staged by a leaked write is rolled back before failing.
+DECLARE
+    v_rows NUMBER := 0;
+BEGIN
+    BEGIN
+        EXECUTE IMMEDIATE 'UPDATE customer SET first_name = ''VPD'' WHERE tenant_id = 1';
+        v_rows := SQL%ROWCOUNT;
+    EXCEPTION
+        WHEN OTHERS THEN
+            DBMS_OUTPUT.PUT_LINE('Update without context rejected as expected: ' || SQLERRM);
+            v_rows := 0;
+    END;
+    IF v_rows > 0 THEN
+        ROLLBACK;
+        RAISE_APPLICATION_ERROR(-20918, 'Fail-closed violated: UPDATE with no context touched rows!');
+    END IF;
+
+    BEGIN
+        EXECUTE IMMEDIATE 'DELETE FROM customer WHERE tenant_id = 1';
+        v_rows := SQL%ROWCOUNT;
+    EXCEPTION
+        WHEN OTHERS THEN
+            DBMS_OUTPUT.PUT_LINE('Delete without context rejected as expected: ' || SQLERRM);
+            v_rows := 0;
+    END;
+    IF v_rows > 0 THEN
+        ROLLBACK;
+        RAISE_APPLICATION_ERROR(-20918, 'Fail-closed violated: DELETE with no context touched rows!');
+    END IF;
+
+    ROLLBACK; -- safety: discard anything the statements may have staged
+    DBMS_OUTPUT.PUT_LINE('No-context UPDATE/DELETE touched 0 rows as expected');
+END;
+/
+
+-- Least-privilege assertions (SRS 58/59, C2/L3): the runtime user must
+-- not bypass VPD and must hold no DELETE on business tables.
+DECLARE
+    v_cnt NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_cnt FROM USER_SYS_PRIVS WHERE PRIVILEGE = 'EXEMPT ACCESS POLICY';
+    DBMS_OUTPUT.PUT_LINE('EXEMPT ACCESS POLICY grants = ' || v_cnt);
+    IF v_cnt > 0 THEN
+        RAISE_APPLICATION_ERROR(-20919,
+            'Privilege violation: APP_RUNTIME holds EXEMPT ACCESS POLICY (VPD bypass)!');
+    END IF;
+
+    SELECT COUNT(*) INTO v_cnt FROM USER_TAB_PRIVS
+     WHERE TABLE_NAME IN ('SALES_ORDER','SALES_ORDER_LINE','PAYMENT','INVENTORY')
+       AND PRIVILEGE = 'DELETE';
+    DBMS_OUTPUT.PUT_LINE('DELETE grants on business tables = ' || v_cnt);
+    IF v_cnt > 0 THEN
+        RAISE_APPLICATION_ERROR(-20919,
+            'Privilege violation: APP_RUNTIME holds DELETE on business tables!');
     END IF;
 END;
 /

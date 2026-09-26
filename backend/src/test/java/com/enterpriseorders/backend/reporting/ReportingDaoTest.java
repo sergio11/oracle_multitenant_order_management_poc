@@ -1,9 +1,11 @@
 package com.enterpriseorders.backend.reporting;
 
+import com.enterpriseorders.backend.reporting.adapter.persistence.ReportingDao;
 import com.enterpriseorders.backend.reporting.port.output.dto.OrderDailySummary;
 import com.enterpriseorders.backend.reporting.port.output.dto.ProductSalesSummary;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -62,6 +64,31 @@ class ReportingDaoTest {
     @Test
     void shouldRefreshMaterializedViews() {
         reportingDao.refreshMaterializedViews();
-        verify(jdbcTemplate).execute(contains("refresh_reporting_views"));
+
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).execute(sql.capture());
+        String block = sql.getValue();
+        assertTrue(block.contains("refresh_reporting_views"));
+        assertTrue(block.contains("clear_tenant_context"));
+        assertTrue(block.indexOf("clear_tenant_context") < block.indexOf("refresh_reporting_views"),
+                "clear_tenant_context must run BEFORE refresh_reporting_views in a single block");
+        verify(jdbcTemplate, times(1)).execute(anyString());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldReturnLastRefreshTime() {
+        var expected = java.sql.Timestamp.from(java.time.Instant.parse("2026-09-26T10:00:00Z"));
+        when(jdbcTemplate.queryForObject(anyString(), any(RowMapper.class))).thenReturn(expected);
+        var result = reportingDao.lastRefreshTime();
+        assertEquals(expected.toInstant(), result);
+        verify(jdbcTemplate).queryForObject(contains("all_mviews"), any(RowMapper.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldReturnNullLastRefreshTimeWhenNeverRefreshed() {
+        when(jdbcTemplate.queryForObject(anyString(), any(RowMapper.class))).thenReturn(null);
+        assertNull(reportingDao.lastRefreshTime());
     }
 }

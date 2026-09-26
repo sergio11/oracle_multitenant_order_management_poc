@@ -15,6 +15,11 @@ REM   %5 product_id
 REM   %6 warehouse_id
 REM   %7 results_table
 REM =====================================================================
+if "%~7"=="" (
+  echo ERROR: expected 7 args: DB_CONN worker_id tenant_id customer_id product_id warehouse_id results_table
+  echo Usage: C_worker_runner.bat "user/pass@//host/pdb" worker_id tenant_id customer_id product_id warehouse_id results_table
+  exit /b 1
+)
 sqlplus -s "%~1" @tests/concurrency/C_concurrent_orders_worker.sql %2 %3 %4 %5 %6 %7 >worker_%2.log 2>&1
 set RC=%errorlevel%
 echo done>worker_%2.done

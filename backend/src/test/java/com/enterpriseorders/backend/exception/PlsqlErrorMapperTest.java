@@ -121,4 +121,31 @@ class PlsqlErrorMapperTest {
         assertEquals("ORDER_SHIPPED_NOT_CANCELLABLE", ((BusinessException) result).getCode());
         assertEquals(409, ((BusinessException) result).getHttpStatus());
     }
+
+    @Test
+    void shouldMapOra20035ToPaymentAmountMismatch() {
+        SQLException ex = new SQLException("ORA-20035: Payment amount does not match order total", "ORA-20035");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("PAYMENT_AMOUNT_MISMATCH", ((BusinessException) result).getCode());
+        assertEquals(400, ((BusinessException) result).getHttpStatus());
+    }
+
+    @Test
+    void shouldMapOra20036ToInvalidQuantity() {
+        SQLException ex = new SQLException("ORA-20036: Quantity must be greater than zero", "ORA-20036");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("INVALID_QUANTITY", ((BusinessException) result).getCode());
+        assertEquals(400, ((BusinessException) result).getHttpStatus());
+    }
+
+    @Test
+    void shouldMapOra20038ToStatusTransitionConflict() {
+        SQLException ex = new SQLException("ORA-20038: Status transition failed: order 1 not found or modified concurrently", "ORA-20038");
+        RuntimeException result = PlsqlErrorMapper.map(ex);
+        assertInstanceOf(BusinessException.class, result);
+        assertEquals("STATUS_TRANSITION_CONFLICT", ((BusinessException) result).getCode());
+        assertEquals(409, ((BusinessException) result).getHttpStatus());
+    }
 }

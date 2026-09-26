@@ -1,0 +1,9 @@
+-- rman_restore_body.rcv — called by rman_restore.bat (kept separate so
+-- the .bat holds pre-checks and this file holds pure RMAN syntax).
+STARTUP FORCE NOMOUNT;
+RESTORE CONTROLFILE FROM AUTOBACKUP;
+ALTER DATABASE MOUNT;
+RESTORE DATABASE;
+RECOVER DATABASE;
+ALTER DATABASE OPEN RESETLOGS;
+ALTER PLUGGABLE DATABASE PDB_OLTP OPEN;

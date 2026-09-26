@@ -16,9 +16,19 @@
 --                      mv_product_sales_summary
 -- Business DML (orders, inventory, payments, audit, outbox, history)
 -- goes through PL/SQL packages with DEFINER rights (APP_OWNER), so
--- APP_RUNTIME only needs SELECT plus the idempotency_key DML.
--- Parity grants kept for audit/history/outbox INSERT as in the
--- original init script intent.
+-- APP_RUNTIME only needs SELECT plus the idempotency_key DML. NO
+-- direct INSERT/UPDATE on audit_event / order_status_history /
+-- outbox_event: every write happens inside the definer-rights
+-- packages (L3). The legacy "parity" grants are revoked on
+-- already-provisioned databases by V019__revoke_reporting_mutation_grants.sql.
+--
+-- APP_REPORTING is read-only: SELECT on tables/MVs plus pkg_tenant
+-- (session tenant context for VPD reads) and pkg_vpd (predicate
+-- holder). EXECUTE on pkg_order_management / pkg_inventory /
+-- pkg_audit is deliberately NOT granted - those packages are
+-- DEFINER's rights, so granting them would let this "read-only" user
+-- reserve stock, mutate orders and write audit rows (C2). V019
+-- revokes them on databases where this migration already ran.
 --
 -- Plain GRANTs on purpose: if a user or object is missing, the
 -- migration must fail loudly (Flyway marks the version failed).
@@ -45,11 +55,11 @@ GRANT SELECT ON audit_event           TO app_runtime;
 -- IdempotencyDao performs direct DML on idempotency_key
 GRANT SELECT, INSERT, UPDATE ON idempotency_key TO app_runtime;
 
--- Parity with the original init-script grants (direct inserts only;
--- normal writes happen inside definer-rights packages)
-GRANT INSERT ON audit_event          TO app_runtime;
-GRANT INSERT ON order_status_history TO app_runtime;
-GRANT INSERT, UPDATE ON outbox_event TO app_runtime;
+-- No direct INSERT/UPDATE on audit_event / order_status_history /
+-- outbox_event (parity grants from the original init script removed,
+-- L3): all writes go through definer-rights packages (pkg_audit,
+-- pkg_order_management). V019 revokes them where this migration
+-- already ran.
 
 -- Reporting views used by ReportingDao / integration tests
 GRANT SELECT ON mv_order_daily_summary   TO app_runtime;
@@ -85,10 +95,13 @@ GRANT SELECT ON idempotency_key       TO app_reporting;
 GRANT SELECT ON mv_order_daily_summary   TO app_reporting;
 GRANT SELECT ON mv_product_sales_summary TO app_reporting;
 
+-- Read-path packages only (C2): pkg_tenant for the per-session tenant
+-- context used by every VPD-filtered read, pkg_vpd as the predicate
+-- holder (also granted by V011). The mutating business packages
+-- (pkg_order_management / pkg_inventory / pkg_audit) are intentionally
+-- absent - V019 revokes them on databases that already received the
+-- old grants.
 GRANT EXECUTE ON pkg_tenant           TO app_reporting;
-GRANT EXECUTE ON pkg_order_management TO app_reporting;
-GRANT EXECUTE ON pkg_inventory        TO app_reporting;
-GRANT EXECUTE ON pkg_audit            TO app_reporting;
 GRANT EXECUTE ON pkg_vpd              TO app_reporting;
 
 -- V017 runtime grants applied successfully.

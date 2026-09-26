@@ -25,11 +25,14 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Public endpoints (health groups liveness/readiness included:
-                // K8s probes poll /internal/health/liveness and /readiness)
-                .requestMatchers("/actuator/health", "/actuator/health/**",
-                        "/internal/health", "/internal/health/**").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/v1/tenants").hasRole("ADMIN")
+                // Public endpoints: actuator lives under the management
+                // base-path /internal (see application.yml), so the real
+                // probe paths are /internal/health/**. There is no
+                // /actuator/** path in this service.
+                // K8s probes poll /internal/health/liveness and /readiness.
+                .requestMatchers("/internal/health", "/internal/health/**").permitAll()
+                // Tenant provisioning/reads are admin-only (L15).
+                .requestMatchers("/api/v1/tenants/**").hasRole("ADMIN")
                 // Order operations require ORDER_OPERATOR role
                 .requestMatchers("/api/v1/orders/**").hasRole("ORDER_OPERATOR")
                 // Reporting refresh requires ADMIN role
@@ -43,10 +46,15 @@ public class SecurityConfig {
         return http.build();
     }
 
-    @Value("${app.security.admin.password:changeme}")
+    // NOTE (C1): no code defaults here. local/test profiles supply values
+    // via application.yml; prod (application-prod.yml) binds with NO default
+    // (${APP_ADMIN_PASSWORD} / ${APP_OPERATOR_PASSWORD}) so the context
+    // fails fast when the env vars are missing. CredentialHardeningCheck
+    // additionally aborts prod startup on weak values.
+    @Value("${app.security.admin.password}")
     private String adminPassword;
 
-    @Value("${app.security.operator.password:changeme}")
+    @Value("${app.security.operator.password}")
     private String operatorPassword;
 
     @Bean
