@@ -46,8 +46,6 @@ public class TenantAwareDataSource implements DataSource {
     /** Oracle unquoted-identifier rule; also makes the schema safe to embed in the session block. */
     private static final String SCHEMA_REGEX = "[A-Z_][A-Z0-9_$#]*";
 
-    private static final String CLEAR_TENANT_SQL = "BEGIN pkg_tenant.clear_tenant_context; END;";
-
     private final DataSource delegate;
     private final TenantContextProvider tenantContext;
     private final String schema;
@@ -119,13 +117,20 @@ public class TenantAwareDataSource implements DataSource {
     /**
      * One anonymous block: schema (validated in the constructor, so safe
      * inside the string literal) + set-or-clear of the tenant context.
+     *
+     * <p>IMPORTANT: the package call MUST be schema-qualified. The outer
+     * block is parsed before its own {@code EXECUTE IMMEDIATE ... ALTER
+     * SESSION} runs, so an unqualified {@code pkg_tenant} would resolve
+     * against the physical session schema (e.g. APP_RUNTIME, where the
+     * package does not exist) and fail with PLS-00201.
      */
     private String buildSessionBlock(Long tenantId) {
         String alterSchema = "EXECUTE IMMEDIATE 'ALTER SESSION SET CURRENT_SCHEMA = " + schema + "'";
+        String pkg = schema + ".pkg_tenant";
         if (tenantId == null) {
-            return "BEGIN " + alterSchema + "; pkg_tenant.clear_tenant_context; END;";
+            return "BEGIN " + alterSchema + "; " + pkg + ".clear_tenant_context; END;";
         }
-        return "BEGIN " + alterSchema + "; pkg_tenant.set_tenant_context(?); END;";
+        return "BEGIN " + alterSchema + "; " + pkg + ".set_tenant_context(?); END;";
     }
 
     /**
@@ -135,12 +140,12 @@ public class TenantAwareDataSource implements DataSource {
      * residual (stale APP_CTX on one pooled session) is bounded by the next
      * borrow-side clear and by abandoned-connection-timeout.
      */
-    private static void clearTenantContext(Connection conn, Long tenantId) {
-        Exception first = attemptClear(conn);
+    private static void clearTenantContext(Connection conn, Long tenantId, String schema) {
+        Exception first = attemptClear(conn, schema);
         if (first == null) {
             return;
         }
-        Exception second = attemptClear(conn);
+        Exception second = attemptClear(conn, schema);
         if (second == null) {
             log.warn("Tenant context clear failed then succeeded on retry (tenant={}, connection={})",
                     tenantId, conn);
@@ -151,12 +156,15 @@ public class TenantAwareDataSource implements DataSource {
                 + "connection (tenant={}, connection={})", tenantId, conn, second);
     }
 
-    private static Exception attemptClear(Connection conn) {
+    private static Exception attemptClear(Connection conn, String schema) {
         try {
             if (conn.isClosed()) {
                 return null;
             }
-            try (var ps = conn.prepareStatement(CLEAR_TENANT_SQL)) {
+            // Schema-qualified: must resolve even if the session's
+            // CURRENT_SCHEMA was changed after borrow (see buildSessionBlock).
+            try (var ps = conn.prepareStatement(
+                    "BEGIN " + schema + ".pkg_tenant.clear_tenant_context; END;")) {
                 ps.execute();
             }
             return null;
@@ -210,17 +218,19 @@ public class TenantAwareDataSource implements DataSource {
         return (Connection) Proxy.newProxyInstance(
                 Connection.class.getClassLoader(),
                 new Class<?>[]{Connection.class},
-                new GuardedConnection(conn, appliedTenant));
+                new GuardedConnection(conn, appliedTenant, schema));
     }
 
     private static final class GuardedConnection implements InvocationHandler {
 
         private final Connection target;
         private final Long appliedTenant;
+        private final String schema;
 
-        private GuardedConnection(Connection target, Long appliedTenant) {
+        private GuardedConnection(Connection target, Long appliedTenant, String schema) {
             this.target = target;
             this.appliedTenant = appliedTenant;
+            this.schema = schema;
         }
 
         @Override
@@ -244,7 +254,7 @@ public class TenantAwareDataSource implements DataSource {
                     // Skip when no tenant was applied: the borrow-side block
                     // already left the session cleared (M10, saves 1 round-trip).
                     if (appliedTenant != null) {
-                        clearTenantContext(target, appliedTenant);
+                        clearTenantContext(target, appliedTenant, schema);
                     }
                     break;
                 default:

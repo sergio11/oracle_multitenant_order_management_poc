@@ -5,6 +5,11 @@
 -- queries can NEVER see rows belonging to another tenant. This is a
 -- core defense-in-depth control (VPD + application context).
 --
+-- Tenant IDs are resolved by BUSINESS CODE (ACME/GLOBEX) - never
+-- hardcoded: identity values differ per environment/seed. The test also
+-- creates its own orders (one DRAFT order + one line per tenant) so the
+-- own-row guards never depend on seed distribution.
+--
 -- Run as APP_RUNTIME (least-privilege runtime user, see README):
 -- Usage:
 --   sqlplus app_runtime/<pwd>@//localhost:1521/pdb_oltp \
@@ -20,156 +25,210 @@ ALTER SESSION SET CURRENT_SCHEMA = APP_OWNER;
 
 PROMPT === SECURITY: cross-tenant isolation (VPD) ===
 
--- Switch to tenant 1 and count its customers
-EXEC pkg_tenant.set_tenant_context(1);
+-- Resolve the two test tenants by business code. TENANT carries no VPD
+-- policy (by design), so this works without context.
+VARIABLE v_acme NUMBER
+VARIABLE v_globex NUMBER
+VARIABLE v_o_acme NUMBER
+VARIABLE v_o_globex NUMBER
+BEGIN
+    SELECT tenant_id INTO :v_acme FROM tenant WHERE tenant_code = 'ACME';
+    SELECT tenant_id INTO :v_globex FROM tenant WHERE tenant_code = 'GLOBEX';
+    IF :v_acme IS NULL OR :v_globex IS NULL OR :v_acme = :v_globex THEN
+        RAISE_APPLICATION_ERROR(-20926, 'Setup: ACME/GLOBEX tenants not found or identical');
+    END IF;
+    DBMS_OUTPUT.PUT_LINE('Test tenants: ACME=' || :v_acme || ' GLOBEX=' || :v_globex);
+END;
+/
+
+-- Setup: one DRAFT order + one line per test tenant (via the business
+-- packages, as APP_RUNTIME would through the API). No confirm: no stock
+-- impact. Cancelled again in the cleanup section.
+EXEC pkg_tenant.set_tenant_context(:v_acme);
+DECLARE
+    v_cust NUMBER;
+    v_prod NUMBER;
+    v_oid  NUMBER;
+BEGIN
+    SELECT MIN(customer_id) INTO v_cust FROM customer;  -- VPD: own tenant only
+    SELECT MIN(product_id) INTO v_prod FROM product;
+    v_oid := pkg_order_management.create_order(:v_acme, v_cust, 'USD');
+    -- p_warehouse_id is accepted but ignored (resolved at confirm time).
+    pkg_order_management.add_order_line(:v_acme, v_oid, v_prod, 1, NULL);
+    :v_o_acme := v_oid;
+    DBMS_OUTPUT.PUT_LINE('ACME test order=' || v_oid);
+END;
+/
+-- Commit the setup rows NOW: the fail-closed section below issues a
+-- safety ROLLBACK that would otherwise wipe them (WHENEVER SQLERROR
+-- EXIT would then roll back the cancel too - hence COMMIT after cleanup).
+COMMIT;
+EXEC pkg_tenant.set_tenant_context(:v_globex);
+DECLARE
+    v_cust NUMBER;
+    v_prod NUMBER;
+    v_oid  NUMBER;
+BEGIN
+    SELECT MIN(customer_id) INTO v_cust FROM customer;  -- VPD: own tenant only
+    SELECT MIN(product_id) INTO v_prod FROM product;
+    v_oid := pkg_order_management.create_order(:v_globex, v_cust, 'USD');
+    pkg_order_management.add_order_line(:v_globex, v_oid, v_prod, 1, NULL);
+    :v_o_globex := v_oid;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX test order=' || v_oid);
+END;
+/
+COMMIT;
+
+-- Switch to ACME and count its customers
+EXEC pkg_tenant.set_tenant_context(:v_acme);
 DECLARE
     c1 NUMBER;
     c2 NUMBER;
 BEGIN
-    SELECT COUNT(*) INTO c1 FROM customer;             -- tenant 1 customers
-    DBMS_OUTPUT.PUT_LINE('Tenant 1 customer count = ' || c1);
+    SELECT COUNT(*) INTO c1 FROM customer;             -- ACME customers
+    DBMS_OUTPUT.PUT_LINE('ACME customer count = ' || c1);
 
-    -- Positive assertion: tenant 1 MUST see its own rows, otherwise
+    -- Positive assertion: ACME MUST see its own rows, otherwise
     -- the isolation checks below would pass vacuously (false pass).
     IF c1 = 0 THEN
         RAISE_APPLICATION_ERROR(-20913,
-            'False pass: tenant 1 sees 0 customers (seed not applied or VPD over-filtering)');
+            'False pass: ACME sees 0 customers (seed not applied or VPD over-filtering)');
     END IF;
 
-    -- Try to touch tenant 2 customer explicitly by id; VPD must block it.
+    -- Try to touch GLOBEX customers explicitly by id; VPD must block it.
     SELECT COUNT(*) INTO c2
-    FROM customer WHERE tenant_id = 2;                 -- should be 0 rows
-    DBMS_OUTPUT.PUT_LINE('Tenant 1 visible rows for tenant_id=2 = ' || c2);
+    FROM customer WHERE tenant_id = :v_globex;         -- should be 0 rows
+    DBMS_OUTPUT.PUT_LINE('ACME visible rows of GLOBEX = ' || c2);
 
     IF c2 > 0 THEN
-        RAISE_APPLICATION_ERROR(-20910, 'Cross-tenant leak: tenant 1 saw tenant 2 customer rows!');
+        RAISE_APPLICATION_ERROR(-20910, 'Cross-tenant leak: ACME saw GLOBEX customer rows!');
     END IF;
 END;
 /
 
--- Switch to tenant 2 and verify isolation in the other direction
-EXEC pkg_tenant.set_tenant_context(2);
+-- Switch to GLOBEX and verify isolation in the other direction
+EXEC pkg_tenant.set_tenant_context(:v_globex);
 DECLARE
     c1 NUMBER;
     c2 NUMBER;
 BEGIN
-    SELECT COUNT(*) INTO c1 FROM customer WHERE tenant_id = 1;
-    DBMS_OUTPUT.PUT_LINE('Tenant 2 visible rows for tenant_id=1 = ' || c1);
+    SELECT COUNT(*) INTO c1 FROM customer WHERE tenant_id = :v_acme;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX visible rows of ACME = ' || c1);
     IF c1 > 0 THEN
-        RAISE_APPLICATION_ERROR(-20911, 'Cross-tenant leak: tenant 2 saw tenant 1 customer rows!');
+        RAISE_APPLICATION_ERROR(-20911, 'Cross-tenant leak: GLOBEX saw ACME customer rows!');
     END IF;
 
-    -- Positive assertion for tenant 2 (prevents false pass)
-    SELECT COUNT(*) INTO c2 FROM customer WHERE tenant_id = 2;
-    DBMS_OUTPUT.PUT_LINE('Tenant 2 own customer count = ' || c2);
+    -- Positive assertion for GLOBEX (prevents false pass)
+    SELECT COUNT(*) INTO c2 FROM customer WHERE tenant_id = :v_globex;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX own customer count = ' || c2);
     IF c2 = 0 THEN
         RAISE_APPLICATION_ERROR(-20915,
-            'False pass: tenant 2 sees 0 customers (seed not applied or VPD over-filtering)');
+            'False pass: GLOBEX sees 0 customers (seed not applied or VPD over-filtering)');
     END IF;
 END;
 /
 
 -- Cross-tenant reads on order/payment/inventory tables, direction A:
--- tenant 1 session must see zero rows of tenant 2 (SRS 14, BR-013)
-EXEC pkg_tenant.set_tenant_context(1);
+-- ACME session must see zero rows of GLOBEX (SRS 14, BR-013)
+EXEC pkg_tenant.set_tenant_context(:v_acme);
 DECLARE
     v_own   NUMBER;
     v_cross NUMBER;
 BEGIN
     SELECT COUNT(*) INTO v_own FROM sales_order;
-    SELECT COUNT(*) INTO v_cross FROM sales_order WHERE tenant_id = 2;
-    DBMS_OUTPUT.PUT_LINE('T1 sales_order own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM sales_order WHERE tenant_id = :v_globex;
+    DBMS_OUTPUT.PUT_LINE('ACME sales_order own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
         RAISE_APPLICATION_ERROR(-20917,
-            'False pass: tenant 1 sees 0 sales_order rows (seed not applied?)');
+            'False pass: ACME sees 0 sales_order rows (setup order missing?)');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 sales_order rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: ACME saw GLOBEX sales_order rows!');
     END IF;
 
     SELECT COUNT(*) INTO v_own FROM sales_order_line;
-    SELECT COUNT(*) INTO v_cross FROM sales_order_line WHERE tenant_id = 2;
-    DBMS_OUTPUT.PUT_LINE('T1 sales_order_line own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM sales_order_line WHERE tenant_id = :v_globex;
+    DBMS_OUTPUT.PUT_LINE('ACME sales_order_line own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
         RAISE_APPLICATION_ERROR(-20917,
-            'False pass: tenant 1 sees 0 sales_order_line rows (seed not applied?)');
+            'False pass: ACME sees 0 sales_order_line rows (setup line missing?)');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 sales_order_line rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: ACME saw GLOBEX sales_order_line rows!');
     END IF;
 
     SELECT COUNT(*) INTO v_own FROM inventory;
-    SELECT COUNT(*) INTO v_cross FROM inventory WHERE tenant_id = 2;
-    DBMS_OUTPUT.PUT_LINE('T1 inventory own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM inventory WHERE tenant_id = :v_globex;
+    DBMS_OUTPUT.PUT_LINE('ACME inventory own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
         RAISE_APPLICATION_ERROR(-20917,
-            'False pass: tenant 1 sees 0 inventory rows (seed not applied?)');
+            'False pass: ACME sees 0 inventory rows (seed not applied?)');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 inventory rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: ACME saw GLOBEX inventory rows!');
     END IF;
 
-    -- Payment has no seed rows: a zero own-count is expected, not a
-    -- false pass - the cross-tenant assertion below still must hold.
+    -- Payment may have no rows for ACME: a zero own-count is expected, not
+    -- a false pass - the cross-tenant assertion below still must hold.
     SELECT COUNT(*) INTO v_own FROM payment;
-    SELECT COUNT(*) INTO v_cross FROM payment WHERE tenant_id = 2;
-    DBMS_OUTPUT.PUT_LINE('T1 payment own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM payment WHERE tenant_id = :v_globex;
+    DBMS_OUTPUT.PUT_LINE('ACME payment own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
-        DBMS_OUTPUT.PUT_LINE('NOTE: tenant 1 has no payment rows - leak check is vacuous for payment here');
+        DBMS_OUTPUT.PUT_LINE('NOTE: ACME has no payment rows - leak check is vacuous for payment here');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 1 saw tenant 2 payment rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: ACME saw GLOBEX payment rows!');
     END IF;
 END;
 /
 
--- Same checks in the other direction (tenant 2 must see zero of tenant 1)
-EXEC pkg_tenant.set_tenant_context(2);
+-- Same checks in the other direction (GLOBEX must see zero of ACME)
+EXEC pkg_tenant.set_tenant_context(:v_globex);
 DECLARE
     v_own   NUMBER;
     v_cross NUMBER;
 BEGIN
     SELECT COUNT(*) INTO v_own FROM sales_order;
-    SELECT COUNT(*) INTO v_cross FROM sales_order WHERE tenant_id = 1;
-    DBMS_OUTPUT.PUT_LINE('T2 sales_order own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM sales_order WHERE tenant_id = :v_acme;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX sales_order own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
         RAISE_APPLICATION_ERROR(-20917,
-            'False pass: tenant 2 sees 0 sales_order rows (seed not applied?)');
+            'False pass: GLOBEX sees 0 sales_order rows (setup order missing?)');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 sales_order rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: GLOBEX saw ACME sales_order rows!');
     END IF;
 
     SELECT COUNT(*) INTO v_own FROM sales_order_line;
-    SELECT COUNT(*) INTO v_cross FROM sales_order_line WHERE tenant_id = 1;
-    DBMS_OUTPUT.PUT_LINE('T2 sales_order_line own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM sales_order_line WHERE tenant_id = :v_acme;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX sales_order_line own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
         RAISE_APPLICATION_ERROR(-20917,
-            'False pass: tenant 2 sees 0 sales_order_line rows (seed not applied?)');
+            'False pass: GLOBEX sees 0 sales_order_line rows (setup line missing?)');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 sales_order_line rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: GLOBEX saw ACME sales_order_line rows!');
     END IF;
 
     SELECT COUNT(*) INTO v_own FROM inventory;
-    SELECT COUNT(*) INTO v_cross FROM inventory WHERE tenant_id = 1;
-    DBMS_OUTPUT.PUT_LINE('T2 inventory own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM inventory WHERE tenant_id = :v_acme;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX inventory own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
         RAISE_APPLICATION_ERROR(-20917,
-            'False pass: tenant 2 sees 0 inventory rows (seed not applied?)');
+            'False pass: GLOBEX sees 0 inventory rows (seed not applied?)');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 inventory rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: GLOBEX saw ACME inventory rows!');
     END IF;
 
     SELECT COUNT(*) INTO v_own FROM payment;
-    SELECT COUNT(*) INTO v_cross FROM payment WHERE tenant_id = 1;
-    DBMS_OUTPUT.PUT_LINE('T2 payment own=' || v_own || ' cross=' || v_cross);
+    SELECT COUNT(*) INTO v_cross FROM payment WHERE tenant_id = :v_acme;
+    DBMS_OUTPUT.PUT_LINE('GLOBEX payment own=' || v_own || ' cross=' || v_cross);
     IF v_own = 0 THEN
-        DBMS_OUTPUT.PUT_LINE('NOTE: tenant 2 has no payment rows - leak check is vacuous for payment here');
+        DBMS_OUTPUT.PUT_LINE('NOTE: GLOBEX has no payment rows - leak check is vacuous for payment here');
     END IF;
     IF v_cross > 0 THEN
-        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: tenant 2 saw tenant 1 payment rows!');
+        RAISE_APPLICATION_ERROR(-20916, 'Cross-tenant leak: GLOBEX saw ACME payment rows!');
     END IF;
 END;
 /
@@ -275,6 +334,25 @@ BEGIN
     END IF;
 END;
 /
+
+-- Cleanup: cancel the setup orders (per-tenant context), then reset the
+-- context for the shared pool. Cancelled orders keep stock untouched
+-- (setup orders were never confirmed).
+EXEC pkg_tenant.set_tenant_context(:v_acme);
+BEGIN
+    pkg_order_management.cancel_order(:v_acme, :v_o_acme, 'SECURITY-TEST-CLEANUP');
+    DBMS_OUTPUT.PUT_LINE('ACME test order cancelled');
+END;
+/
+EXEC pkg_tenant.set_tenant_context(:v_globex);
+BEGIN
+    pkg_order_management.cancel_order(:v_globex, :v_o_globex, 'SECURITY-TEST-CLEANUP');
+    DBMS_OUTPUT.PUT_LINE('GLOBEX test order cancelled');
+END;
+/
+-- Persist the cancels so a mid-suite abort/exit-rollback cannot leave
+-- setup rows behind as live DRAFTs.
+COMMIT;
 
 -- Clean up: reset context for the shared pool
 EXEC pkg_tenant.clear_tenant_context;

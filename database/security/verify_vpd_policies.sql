@@ -111,16 +111,22 @@ BEGIN
 
     -- Informational: any policy on APP_OWNER tables NOT in the expected
     -- set (duplicates left behind by older scripts, stray policies).
+    -- NOTE: membership is checked with a PL/SQL loop (a TABLE() cast
+    -- would require a schema-level collection type, not a PL/SQL one).
     DBMS_OUTPUT.PUT_LINE('--- policies present but not expected ---');
     FOR r IN (SELECT object_name, policy_name
                 FROM all_policies
                WHERE object_owner = 'APP_OWNER'
-               AND object_name || ':' || policy_name NOT IN
-                   (SELECT SUBSTR(column_value, 1, INSTR(column_value, ':') - 1) || ':' ||
-                           SUBSTR(column_value, INSTR(column_value, ':') + 1)
-                      FROM TABLE(v_expected))
                ORDER BY object_name, policy_name) LOOP
-        DBMS_OUTPUT.PUT_LINE('INFO unexpected policy: ' || r.object_name || ':' || r.policy_name);
+        v_count := 0;
+        FOR i IN 1 .. v_expected.COUNT LOOP
+            IF v_expected(i) = r.object_name || ':' || r.policy_name THEN
+                v_count := 1;
+            END IF;
+        END LOOP;
+        IF v_count = 0 THEN
+            DBMS_OUTPUT.PUT_LINE('INFO unexpected policy: ' || r.object_name || ':' || r.policy_name);
+        END IF;
     END LOOP;
 
     IF v_missing > 0 OR v_bad_attr > 0 THEN

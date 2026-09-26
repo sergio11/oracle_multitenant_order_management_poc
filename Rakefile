@@ -797,9 +797,12 @@ namespace :qa do
     #       (200) and MUST NOT be readable as GLOBEX (404 = "no such
     #       order for this tenant"; 200 would be a leak);
     #    b) GET /reports/orders/daily twice, ACME vs GLOBEX: both 200,
-    #       each body holds rows of exactly ONE distinct tenantId
-    #       (OrderDailySummary carries tenantId), the two tenantIds
-    #       differ, and the two bodies differ.
+    #    part A (VPD row isolation, C4-binding bypassed with ADMIN who may
+    #    access any tenant): ADMIN+GLOBEX reading an ACME order -> 404;
+    #    ADMIN daily reports for ACME vs GLOBEX -> 200/200 with disjoint
+    #    single-tenant row sets and different bodies.
+    #    part B (C4 user->tenant binding): operator+GLOBEX -> 403
+    #    TENANT_NOT_ALLOWED on both order read and reports.
     #    The old check only asserted "not 500", so a leak answering 200
     #    with the other tenant's rows passed. Kept as ONE check to keep
     #    the documented "8 API checks" contract; the detail string lists
@@ -810,22 +813,28 @@ namespace :qa do
         own   = http_get("#{BACKEND_URL}/api/v1/orders/#{order_id}",
                          user: operator, headers: { 'X-Tenant-ID' => 'ACME' })
         cross = http_get("#{BACKEND_URL}/api/v1/orders/#{order_id}",
+                         user: admin, headers: { 'X-Tenant-ID' => 'GLOBEX' })
+        bound = http_get("#{BACKEND_URL}/api/v1/orders/#{order_id}",
                          user: operator, headers: { 'X-Tenant-ID' => 'GLOBEX' })
         problems << "ACME GET own order HTTP #{own.code} (want 200)" unless own.code.to_i == 200
         unless cross.code.to_i == 404
-          problems << "GLOBEX GET ACME order HTTP #{cross.code} (want 404 - cross-tenant leak?)"
+          problems << "ADMIN GLOBEX GET ACME order HTTP #{cross.code} (want 404 - cross-tenant leak?)"
+        end
+        unless bound.code.to_i == 403 && bound.body.to_s.include?('TENANT_NOT_ALLOWED')
+          problems << "operator GLOBEX GET ACME order HTTP #{bound.code} (want 403 TENANT_NOT_ALLOWED) #{bound.body.to_s[0, 80]}"
         end
       else
         problems << 'order probe skipped (no order created in step 3)'
       end
 
-      fetch_daily = lambda do |tenant|
+      fetch_daily = lambda do |user, tenant|
         http_get("#{BACKEND_URL}/api/v1/reports/orders/daily",
-                 user: operator,
+                 user: user,
                  headers: { 'X-Tenant-ID' => tenant })
       end
-      r_acme   = fetch_daily.call('ACME')
-      r_globex = fetch_daily.call('GLOBEX')
+      r_acme   = fetch_daily.call(admin, 'ACME')
+      r_globex = fetch_daily.call(admin, 'GLOBEX')
+      r_bound  = fetch_daily.call(operator, 'GLOBEX')
       if r_acme.code.to_i == 200 && r_globex.code.to_i == 200
         tenant_ids = lambda do |res|
           JSON.parse(res.body).map { |row| row['tenantId'] }.compact.uniq
@@ -842,6 +851,9 @@ namespace :qa do
         end
       else
         problems << "GET reports HTTP ACME=#{r_acme.code} GLOBEX=#{r_globex.code} (want 200/200)"
+      end
+      unless r_bound.code.to_i == 403 && r_bound.body.to_s.include?('TENANT_NOT_ALLOWED')
+        problems << "operator GLOBEX GET reports HTTP #{r_bound.code} (want 403 TENANT_NOT_ALLOWED)"
       end
 
       check.call('Tenant isolation (ACME vs GLOBEX)', problems.empty?,
