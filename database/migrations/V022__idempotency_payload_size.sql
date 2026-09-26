@@ -1,0 +1,14 @@
+--=====================================================================
+-- V022 - IDEMPOTENCY_KEY.response_payload 2000 -> 4000 (L9)
+--
+-- V012 declared response_payload VARCHAR2(2000) (byte semantics). The
+-- stored value is the serialized OrderResponse JSON; an order with
+-- many lines can exceed 2000 bytes, and the idempotency layer would
+-- then fail (ORA-01401/ORA-01461) on the very request it exists to
+-- make safe.
+--
+-- 4000 is the SQL VARCHAR2 ceiling without EXTENDED string support, so
+-- responses larger than that remain a documented residual (a future
+-- migration could switch the column to CLOB).
+--=====================================================================
+ALTER TABLE idempotency_key MODIFY (response_payload VARCHAR2(4000 CHAR));

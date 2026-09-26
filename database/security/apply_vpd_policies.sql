@@ -12,6 +12,16 @@
 --   sqlplus app_owner/<pwd>@//localhost:1521/pdb_oltp @database/security/apply_vpd_policies.sql
 --
 -- NOTE: Reflects the exact policy set that V011 migration also creates.
+--
+-- H1 (exception safety): the historical shape of this script was
+-- "drop every policy, then add every policy". A failure in the ADD
+-- pass left the tables without tenant isolation (fail-open) until an
+-- operator re-ran the script. The ADD pass below therefore runs in ONE
+-- block whose WHEN OTHERS handler re-runs ALL adds (each add in its own
+-- tolerant sub-block, so already-present policies raise ORA-28105
+-- harmlessly) before RE-RAISING the original error: either the script
+-- succeeds with the full policy set, or it fails loudly with as many
+-- policies restored as possible - never silently unprotected.
 --=====================================================================
 
 -- Ensure all policies are dropped first (idempotent re-runs).
@@ -40,6 +50,9 @@ END;
 
 --=====================================================================
 -- Add static policies (statement_type 'SELECT,INSERT,UPDATE,DELETE')
+-- Compensation: if ANY add below fails, every add is re-attempted in
+-- the handler (tolerating ORA-28105 for the ones already restored)
+-- and the original error is re-raised - see header.
 --=====================================================================
 BEGIN
     DBMS_RLS.ADD_POLICY('APP_OWNER','CUSTOMER',          'POL_CUSTOMER_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
@@ -56,7 +69,81 @@ BEGIN
     DBMS_RLS.ADD_POLICY('APP_OWNER','OUTBOX_EVENT',      'POL_OUTBOX_TENANT',  'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
     DBMS_RLS.ADD_POLICY('APP_OWNER','IDEMPOTENCY_KEY','POL_IDEMP_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
     DBMS_RLS.ADD_POLICY('APP_OWNER','AUDIT_EVENT','POL_AUDIT_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+EXCEPTION
+    WHEN OTHERS THEN
+        -- COMPENSATION: restore the full policy set (tolerating
+        -- ORA-28105 for policies that are already back), then surface
+        -- the original failure so the caller sees a loud error.
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','CUSTOMER',          'POL_CUSTOMER_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','CUSTOMER_ADDRESS',  'POL_ADDR_TENANT',    'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','CUSTOMER_ACCOUNT',  'POL_ACCT_TENANT',    'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','PRODUCT_CATEGORY',  'POL_CATEGORY_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','PRODUCT',           'POL_PRODUCT_TENANT', 'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','WAREHOUSE',         'POL_WAREHOUSE_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','INVENTORY',         'POL_INVENTORY_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','SALES_ORDER',       'POL_ORDER_TENANT',   'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','SALES_ORDER_LINE',  'POL_LINE_TENANT',    'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','ORDER_STATUS_HISTORY','POL_HISTORY_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','PAYMENT',           'POL_PAYMENT_TENANT', 'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','OUTBOX_EVENT',      'POL_OUTBOX_TENANT',  'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','IDEMPOTENCY_KEY','POL_IDEMP_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','AUDIT_EVENT','POL_AUDIT_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        RAISE;
 END;
 /
 
-PROMPT VPD policies applied successfully.
+-- Final state check: fail loudly if any policy is still missing
+-- (catches swallowed failures and keeps re-runs honest).
+-- L12: the old SQL*Plus-only PROMPT command was removed - it is not
+-- SQL and would fail under any non-SQL*Plus runner. DBMS_OUTPUT below
+-- is silent unless the runner enables SERVEROUTPUT (harmless either
+-- way); the RAISE_APPLICATION_ERROR is the real verdict.
+DECLARE
+    v_missing NUMBER;
+BEGIN
+    SELECT COUNT(*)
+      INTO v_missing
+      FROM all_policies
+     WHERE object_owner = 'APP_OWNER'
+       AND policy_name IN ('POL_CUSTOMER_TENANT','POL_ADDR_TENANT','POL_ACCT_TENANT',
+                           'POL_CATEGORY_TENANT','POL_PRODUCT_TENANT','POL_WAREHOUSE_TENANT',
+                           'POL_INVENTORY_TENANT','POL_ORDER_TENANT','POL_LINE_TENANT',
+                           'POL_HISTORY_TENANT','POL_PAYMENT_TENANT','POL_OUTBOX_TENANT',
+                           'POL_IDEMP_TENANT','POL_AUDIT_TENANT');
+
+    IF v_missing <> 14 THEN
+        RAISE_APPLICATION_ERROR(-20931,
+            'VPD apply incomplete: expected 14 policies, found ' || v_missing);
+    END IF;
+
+    DBMS_OUTPUT.PUT_LINE('VPD policies applied successfully (14/14).');
+END;
+/

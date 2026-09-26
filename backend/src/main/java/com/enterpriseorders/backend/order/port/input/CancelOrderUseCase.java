@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.order.port.input;
 
-import com.enterpriseorders.backend.order.dto.OrderResponse;
+import com.enterpriseorders.backend.order.model.OrderView;
 
 public interface CancelOrderUseCase {
-    OrderResponse cancelOrder(Long orderId, String reason);
+    OrderView cancelOrder(Long orderId, String reason, String idempotencyKey);
 }

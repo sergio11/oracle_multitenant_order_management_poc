@@ -39,15 +39,14 @@ CREATE OR REPLACE CONTEXT app_ctx USING app_owner.pkg_tenant;
 
 --=====================================================================
 -- Grants for least-privilege users (SRS 58, 59)
---=====================================================================
+-- NOTE (C2): app_reporting is read-only - EXECUTE on the mutating
+-- packages (pkg_audit, pkg_inventory, pkg_order_management) is
+-- deliberately NOT granted here (revoked on existing DBs by V019).
 GRANT EXECUTE ON pkg_audit            TO app_runtime;
-GRANT EXECUTE ON pkg_audit            TO app_reporting;
 GRANT EXECUTE ON pkg_tenant           TO app_runtime;
 GRANT EXECUTE ON pkg_tenant           TO app_reporting;
 GRANT EXECUTE ON pkg_inventory        TO app_runtime;
-GRANT EXECUTE ON pkg_inventory        TO app_reporting;
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
-GRANT EXECUTE ON pkg_order_management TO app_reporting;
 
 PROMPT Packages deployed successfully.
 EXIT SUCCESS

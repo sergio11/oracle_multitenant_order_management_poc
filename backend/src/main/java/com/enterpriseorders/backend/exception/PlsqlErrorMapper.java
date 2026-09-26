@@ -34,7 +34,10 @@ public final class PlsqlErrorMapper {
         Map.entry("ORA-20031", new ErrorMapping("ORDER_ALREADY_PAID", "Order already paid; duplicate payment rejected", 409)),
         Map.entry("ORA-20032", new ErrorMapping("PAYMENT_AMOUNT_INVALID", "Payment amount must be positive", 400)),
         Map.entry("ORA-20033", new ErrorMapping("PAYMENT_CURRENCY_MISMATCH", "Payment currency does not match order currency", 400)),
-        Map.entry("ORA-20034", new ErrorMapping("ORDER_SHIPPED_NOT_CANCELLABLE", "Cannot cancel a shipped order", 409))
+        Map.entry("ORA-20034", new ErrorMapping("ORDER_SHIPPED_NOT_CANCELLABLE", "Cannot cancel a shipped order", 409)),
+        Map.entry("ORA-20035", new ErrorMapping("PAYMENT_AMOUNT_MISMATCH", "Payment amount does not match order total", 400)),
+        Map.entry("ORA-20036", new ErrorMapping("INVALID_QUANTITY", "Quantity must be greater than zero", 400)),
+        Map.entry("ORA-20038", new ErrorMapping("STATUS_TRANSITION_CONFLICT", "Status transition failed: order not found or modified concurrently", 409))
     );
 
     private PlsqlErrorMapper() {

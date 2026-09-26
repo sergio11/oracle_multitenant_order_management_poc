@@ -5,3 +5,14 @@ metadata:
   labels:
     app.kubernetes.io/part-of: enterprise-order-platform
     environment: qa
+    # Pod Security Admission:
+    #   enforce: baseline - the Oracle image (gvenzl/oracle-free) runs its
+    #   entrypoint as root and needs it, so `restricted` cannot be
+    #   enforced cluster-wide in this single-namespace lab. The backend
+    #   pod voluntarily complies with `restricted` (see
+    #   backend/deployment.yaml securityContext).
+    #   restricted is kept as warn/audit so violations are reported
+    #   without breaking Oracle bring-up.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

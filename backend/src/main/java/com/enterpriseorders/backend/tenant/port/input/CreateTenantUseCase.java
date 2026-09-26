@@ -1,8 +1,8 @@
 package com.enterpriseorders.backend.tenant.port.input;
 
-import com.enterpriseorders.backend.tenant.dto.TenantRequest;
-import com.enterpriseorders.backend.tenant.dto.TenantResponse;
+import com.enterpriseorders.backend.tenant.model.NewTenant;
+import com.enterpriseorders.backend.tenant.model.TenantView;
 
 public interface CreateTenantUseCase {
-    TenantResponse createTenant(TenantRequest request);
+    TenantView createTenant(NewTenant request);
 }

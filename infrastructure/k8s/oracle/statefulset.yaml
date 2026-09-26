@@ -17,6 +17,14 @@ spec:
       labels:
         app: oracle
     spec:
+      # Oracle pod is deliberately NOT hardened beyond this: the
+      # gvenzl/oracle-free entrypoint runs as root and needs it for
+      # first-boot DB creation (chown/setuid), so runAsNonRoot /
+      # readOnlyRootFilesystem / capability drops would break bring-up.
+      # Baseline PSA is enforced at namespace level, exposure is covered
+      # by NetworkPolicy (see network-policies.yaml) and the image needs
+      # no Kubernetes API access at all.
+      automountServiceAccountToken: false
       containers:
         - name: oracle
           image: gvenzl/oracle-free:23-slim

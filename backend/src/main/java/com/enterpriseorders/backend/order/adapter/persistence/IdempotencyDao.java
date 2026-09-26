@@ -1,0 +1,63 @@
+package com.enterpriseorders.backend.order.adapter.persistence;
+
+import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.util.Optional;
+
+/**
+ * JDBC repository for idempotency tracking (SRS §62, FR-014).
+ *
+ * Uses the idempotency_key table with a unique (tenant_id, idempotency_key)
+ * constraint. The first request inserts PENDING; the executor flips the row
+ * to COMPLETED together with the serialized response so a retry with the
+ * same key returns the original result without re-executing.
+ */
+@Repository
+public class IdempotencyDao implements IdempotencyStore {
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public IdempotencyDao(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @Override
+    public Optional<IdempotencyRecord> findByKey(Long tenantId, String idempotencyKey) {
+        return jdbcTemplate.query(
+                "SELECT aggregate_id, operation, status, response_payload " +
+                "FROM idempotency_key WHERE tenant_id = ? AND idempotency_key = ?",
+                rs -> rs.next()
+                        ? Optional.of(new IdempotencyRecord(
+                                rs.getLong("aggregate_id"),
+                                rs.getString("operation"),
+                                rs.getString("status"),
+                                rs.getString("response_payload")))
+                        : Optional.empty(),
+                tenantId, idempotencyKey);
+    }
+
+    @Override
+    public boolean insertPending(Long tenantId, String idempotencyKey,
+                                 String operation, Long aggregateId) {
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO idempotency_key " +
+                    "(tenant_id, idempotency_key, operation, aggregate_id, status) " +
+                    "VALUES (?, ?, ?, ?, 'PENDING')",
+                    tenantId, idempotencyKey, operation, aggregateId);
+            return true;
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public int markCompleted(Long tenantId, String idempotencyKey, String responsePayload) {
+        return jdbcTemplate.update(
+                "UPDATE idempotency_key SET status = 'COMPLETED', response_payload = ? " +
+                "WHERE tenant_id = ? AND idempotency_key = ?",
+                responsePayload, tenantId, idempotencyKey);
+    }
+}

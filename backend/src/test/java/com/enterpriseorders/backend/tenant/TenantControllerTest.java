@@ -1,9 +1,12 @@
 package com.enterpriseorders.backend.tenant;
 
-import com.enterpriseorders.backend.tenant.dto.TenantResponse;
+import com.enterpriseorders.backend.tenant.adapter.web.TenantController;
+import com.enterpriseorders.backend.tenant.model.TenantView;
 import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
-import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
+import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
+import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
+import com.enterpriseorders.backend.tenant.port.output.UserTenancy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,11 +26,12 @@ class TenantControllerTest {
     @Autowired private ObjectMapper objectMapper;
     @MockBean private CreateTenantUseCase createTenantUseCase;
     @MockBean private GetTenantQuery getTenantQuery;
-    @MockBean private TenantRepository tenantRepository;
-    @MockBean private TenantContext tenantContext;
+    @MockBean private ResolveTenantUseCase resolveTenantUseCase;
+    @MockBean private TenantContextHolder tenantContextHolder;
+    @MockBean private UserTenancy userTenancy;
 
     private static final String BASE = "/api/v1/tenants";
-    private final TenantResponse mockTenant = new TenantResponse(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA");
+    private final TenantView mockTenant = new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA");
 
     @Test
     void shouldCreateTenant() throws Exception {

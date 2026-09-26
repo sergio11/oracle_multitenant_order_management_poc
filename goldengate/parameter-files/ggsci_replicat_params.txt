@@ -6,7 +6,7 @@
 -- transactional consistency per table group.
 --=====================================================================
 REPLICAT REP_OLTP
-USERID gg_owner, PASSWORD <managed_by_ggsci_cred_store>
+USERIDALIAS ogg_admin
 REPORTCOUNT EVERY 5 MINUTES, LOGONLY
 SETENV (NLS_LANG = "AMERICAN_AMERICA.AL32UTF8")
 

@@ -1,0 +1,66 @@
+# NetworkPolicies for the QA namespace (applied by `rake qa:deploy`).
+#
+# NOTE (kind): the kind default CNI (kindnet) does NOT enforce
+# NetworkPolicy. On this lab cluster the policies are therefore inert
+# documentation - QA traffic is unchanged - and they only take effect on
+# a cluster whose CNI enforces them (Calico, Cilium, ...).
+#
+# Design: default-deny ingress, then the explicit allows for the two lab
+# flows:
+#   * backend:8080  <- anywhere (kind NodePort 30080 -> host 8080)
+#   * oracle:1521   <- backend pods  AND  anywhere (kind NodePort 30152
+#     -> host 1521, used by Flyway/sqlplus from the workstation).
+#     The allow-all entry for 1521 is a deliberate lab concession;
+#     tighten it to the workstation/VPN CIDR on a real cluster.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: poc-qa
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-ingress
+  namespace: poc-qa
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    # The backend is the public API surface of the lab.
+    - ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-oracle-ingress
+  namespace: poc-qa
+spec:
+  podSelector:
+    matchLabels:
+      app: oracle
+  policyTypes:
+    - Ingress
+  ingress:
+    # Application runtime connects to the listener.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 1521
+    # Lab: workstation Flyway / sqlplus through NodePort 30152.
+    - ports:
+        - protocol: TCP
+          port: 1521

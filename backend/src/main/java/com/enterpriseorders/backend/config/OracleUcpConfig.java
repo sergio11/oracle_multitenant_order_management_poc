@@ -52,6 +52,9 @@ public class OracleUcpConfig {
     @Value("${oracle.ucp.validate-connection-on-borrow:true}")
     private boolean validateOnBorrow;
 
+    @Value("${oracle.ucp.connection-validation-timeout:10}")
+    private int connectionValidationTimeout;
+
     @Value("${oracle.schema:APP_OWNER}")
     private String schema;
 
@@ -83,7 +86,7 @@ public class OracleUcpConfig {
 
         // Health checks: validate connections before borrow (FT-001)
         pds.setValidateConnectionOnBorrow(validateOnBorrow);
-        pds.setConnectionValidationTimeout(10);
+        pds.setConnectionValidationTimeout(connectionValidationTimeout);
 
         return pds;
     }

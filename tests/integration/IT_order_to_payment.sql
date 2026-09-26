@@ -59,6 +59,19 @@ EXEC DBMS_OUTPUT.PUT_LINE('Added line: qty=2 product_id=' || &p_product_id);
 EXEC pkg_order_management.confirm_order(&p_tenant_id, :v_order_id, 'TEST_USER', 'IT-' || SYS_GUID());
 EXEC DBMS_OUTPUT.PUT_LINE('Order confirmed (status should be CONFIRMED)');
 
+-- 3b) Assert order reached CONFIRMED
+DECLARE
+    v_status VARCHAR2(20);
+BEGIN
+    SELECT status INTO v_status FROM sales_order
+     WHERE tenant_id = &p_tenant_id AND order_id = :v_order_id;
+    IF v_status <> 'CONFIRMED' THEN
+        RAISE_APPLICATION_ERROR(-20906, 'Expected CONFIRMED after confirm, got ' || v_status);
+    END IF;
+    DBMS_OUTPUT.PUT_LINE('Status assertion OK: CONFIRMED');
+END;
+/
+
 -- 4) Register payment (amount must equal the order total)
 EXEC pkg_order_management.register_payment(&p_tenant_id, :v_order_id, 'PAY-' || :v_order_id, 2*&p_unit_price, 'USD', 'CARD', 'TEST_USER', 'IT-' || SYS_GUID());
 EXEC DBMS_OUTPUT.PUT_LINE('Payment registered');
@@ -93,13 +106,14 @@ BEGIN
 END;
 /
 
--- 6) Assert payment amount equals the order total
+-- 6) Assert payment amount equals the order total + order reached PAID
 DECLARE
     v_pay_amount  NUMBER(18,2);
     v_order_total NUMBER(18,2);
+    v_status      VARCHAR2(20);
 BEGIN
-    SELECT p.amount, o.total_amount
-      INTO v_pay_amount, v_order_total
+    SELECT p.amount, o.total_amount, o.status
+      INTO v_pay_amount, v_order_total, v_status
       FROM payment p
       JOIN sales_order o ON o.order_id = p.order_id AND o.tenant_id = p.tenant_id
      WHERE p.tenant_id = &p_tenant_id
@@ -111,6 +125,11 @@ BEGIN
             ' does not equal order total ' || v_order_total);
     END IF;
     DBMS_OUTPUT.PUT_LINE('Payment amount assertion OK: amount=' || v_pay_amount);
+
+    IF v_status <> 'PAID' THEN
+        RAISE_APPLICATION_ERROR(-20907, 'Expected PAID after payment, got ' || v_status);
+    END IF;
+    DBMS_OUTPUT.PUT_LINE('Status assertion OK: PAID');
 END;
 /
 
@@ -149,6 +168,40 @@ BEGIN
         RAISE_APPLICATION_ERROR(-20903, 'Outbox missing ORDER_CONFIRMED event');
     END IF;
     DBMS_OUTPUT.PUT_LINE('Outbox assertion OK: events=' || v_outbox);
+END;
+/
+
+-- 9) Cleanup: remove this run's rows by business key (the order id just
+--    created) so repeated runs do not accumulate. FK-safe order:
+--    children (payment/history/lines) before parent; outbox/audit carry
+--    no FK but are scoped to this order. Best-effort: APP_RUNTIME holds
+--    no DELETE privilege (least-privilege, V017), so a rejection is
+--    reported, not failed; a privileged run removes the rows.
+BEGIN
+    -- Dynamic SQL on purpose: APP_RUNTIME holds no DELETE privilege, so
+    -- static DELETEs would fail the whole block at compile time
+    -- (ORA-06550+ORA-01031) where no handler can catch them; via
+    -- EXECUTE IMMEDIATE a rejection becomes a runtime error handled below.
+    EXECUTE IMMEDIATE 'DELETE FROM payment WHERE tenant_id = :1 AND order_id = :2'
+        USING &p_tenant_id, :v_order_id;
+    EXECUTE IMMEDIATE 'DELETE FROM order_status_history WHERE tenant_id = :1 AND order_id = :2'
+        USING &p_tenant_id, :v_order_id;
+    EXECUTE IMMEDIATE 'DELETE FROM sales_order_line WHERE tenant_id = :1 AND order_id = :2'
+        USING &p_tenant_id, :v_order_id;
+    EXECUTE IMMEDIATE 'DELETE FROM outbox_event WHERE tenant_id = :1 AND aggregate_type = ''SALES_ORDER'''
+        || ' AND aggregate_id = :2'
+        USING &p_tenant_id, TO_CHAR(:v_order_id);
+    EXECUTE IMMEDIATE 'DELETE FROM audit_event WHERE tenant_id = :1 AND entity_type = ''SALES_ORDER'''
+        || ' AND entity_id = :2'
+        USING &p_tenant_id, TO_CHAR(:v_order_id);
+    EXECUTE IMMEDIATE 'DELETE FROM sales_order WHERE tenant_id = :1 AND order_id = :2'
+        USING &p_tenant_id, :v_order_id;
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Cleanup OK: test order rows removed');
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        DBMS_OUTPUT.PUT_LINE('NOTE: cleanup skipped (' || SQLERRM || ')');
 END;
 /
 

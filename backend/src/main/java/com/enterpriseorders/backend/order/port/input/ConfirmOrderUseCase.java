@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.order.port.input;
 
-import com.enterpriseorders.backend.order.dto.OrderResponse;
+import com.enterpriseorders.backend.order.model.OrderView;
 
 public interface ConfirmOrderUseCase {
-    OrderResponse confirmOrder(Long orderId, String idempotencyKey);
+    OrderView confirmOrder(Long orderId, String idempotencyKey);
 }

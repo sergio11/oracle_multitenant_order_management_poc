@@ -45,7 +45,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_tenant AS
             p_entity_id   => TO_CHAR(v_tenant_id),
             p_action      => 'CREATE_TENANT',
             p_actor       => 'APP_JAVA',
-            p_payload     => '{"code":"' || p_tenant_code || '","tier":"' || p_tier || '"}'
+            p_payload     => JSON_OBJECT(
+                                 KEY 'code' VALUE p_tenant_code,
+                                 KEY 'tier' VALUE p_tier)
         );
 
         RETURN v_tenant_id;

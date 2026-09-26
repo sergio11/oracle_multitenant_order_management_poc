@@ -42,7 +42,12 @@ services:
       ORACLE_PASSWORD: ${ORACLE_PASSWORD}
       ORACLE_DATABASE: ${ORACLE_DATABASE:-PDB_OLTP}
     ports:
-      - "${ORACLE_LISTENER_PORT:-1521}:1521"
+      # Loopback-only publish: the listener must not be reachable from
+      # other hosts on the LAN. Host tools (sqlplus, mvn flyway, the
+      # backend on the host) connect via localhost:1521; containers on
+      # poc_oracle_net talk to the container IP directly and never use
+      # this published port.
+      - "127.0.0.1:${ORACLE_LISTENER_PORT:-1521}:1521"
     volumes:
       - oracle-data:/opt/oracle/oradata
       # Bind-mount local scripts so gvenzl/oracle-free executes them on

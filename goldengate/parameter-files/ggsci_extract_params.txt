@@ -7,12 +7,13 @@
 --   ADD EXTTRAIL /u01/ggate/dirdat/lt, EXTRACT ext_oltp
 --=====================================================================
 EXTRACT EXT_OLTP
-USERID gg_owner, PASSWORD <managed_by_ggsci_cred_store>
+USERIDALIAS ogg_admin
+RMTHOST <ogg-replicat-host>, MGRPORT 7809
+RMTTRAIL ./dirdat/rt
 REPORTCOUNT EVERY 5 MINUTES, LOGONLY
 SETENV (NLS_LANG = "AMERICAN_AMERICA.AL32UTF8")
 
 -- Capture from the PDB containing the OLTP schema (APP_OWNER)
-SOURCEDEFS ./dirdefs/*.def
 
 -- Tables to capture (tenant-aware OLTP tables, SRS §96)
 TABLE APP_OWNER.TENANT;
