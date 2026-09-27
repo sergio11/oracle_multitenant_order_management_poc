@@ -579,7 +579,7 @@ namespace :qa do
       puts 'Flyway repair OK.'
     end
 
-    desc 'Run Flyway migrations (V001-V022) against Oracle NodePort :1521'
+    desc 'Run Flyway migrations (V001-V025) against Oracle NodePort :1521'
     task :migrate do
       ensure_cluster!
       puts 'Waiting for Oracle before migrate...'
@@ -659,9 +659,11 @@ namespace :qa do
           GRANT SELECT, INSERT ON #{tbl} TO #{ruser};
           EXIT SUCCESS
         SQL
+        # Closure fix (V023): stock setup runs as APP_OWNER - APP_RUNTIME
+        # no longer holds EXECUTE on pkg_inventory (set_test_stock).
         exec_sql_file_in_pod!('/tmp/C_setup_stock.sql',
                               [tenant_id, product_id, warehouse_id, 1],
-                              ruser, rpass, 'setup-stock')
+                              ouser, opass, 'setup-stock')
 
         puts "Launching #{workers} workers..."
         results = Array.new(workers)
@@ -705,7 +707,7 @@ namespace :qa do
           begin
             exec_sql_file_in_pod!('/tmp/C_setup_stock.sql',
                                   [tenant_id, product_id, warehouse_id, 100],
-                                  ruser, rpass, 'restore-stock')
+                                  ouser, opass, 'restore-stock')
           rescue StandardError => e
             warn "WARNING: stock restore failed: #{e.message}"
           end

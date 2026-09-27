@@ -42,10 +42,11 @@ CREATE OR REPLACE CONTEXT app_ctx USING app_owner.pkg_tenant;
 -- NOTE (C2): app_reporting is read-only - EXECUTE on the mutating
 -- packages (pkg_audit, pkg_inventory, pkg_order_management) is
 -- deliberately NOT granted here (revoked on existing DBs by V019).
+-- Closure fixes: app_runtime no longer gets pkg_inventory (V023 - the
+-- set_test_stock backdoor), app_reporting no longer gets pkg_tenant
+-- (V023 - tenant lifecycle must stay out of the read-only user).
 GRANT EXECUTE ON pkg_audit            TO app_runtime;
 GRANT EXECUTE ON pkg_tenant           TO app_runtime;
-GRANT EXECUTE ON pkg_tenant           TO app_reporting;
-GRANT EXECUTE ON pkg_inventory        TO app_runtime;
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
 
 PROMPT Packages deployed successfully.

@@ -84,7 +84,9 @@ if errorlevel 1 (
 
 REM 2) Reset stock for the product to exactly 1 unit (pessimistic).
 REM    Separate .sql file (no cmd quoting hazards); errors are shown.
-sqlplus -s "%DB_CONN%" @tests/concurrency/C_setup_stock.sql %TENANT_ID% %PRODUCT_ID% %WAREHOUSE_ID% 1
+REM    Closure fix (V023): setup runs as APP_OWNER - APP_RUNTIME no
+REM    longer holds EXECUTE on pkg_inventory (set_test_stock).
+sqlplus -s "%DB_OWNER_CONN%" @tests/concurrency/C_setup_stock.sql %TENANT_ID% %PRODUCT_ID% %WAREHOUSE_ID% 1
 if errorlevel 1 (
   echo ERROR: stock setup failed
   goto :cleanup_table

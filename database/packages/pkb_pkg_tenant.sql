@@ -108,6 +108,9 @@ CREATE OR REPLACE PACKAGE BODY pkg_tenant AS
 END pkg_tenant;
 /
 
--- Grant execute to runtime and reporting users (least privilege, SRS 58/59)
+-- Grant execute to the runtime user only (least privilege, SRS 58/59).
+-- Closure fix (C3): the former EXECUTE grant to app_reporting is
+-- removed - pkg_tenant carries create/activate/suspend lifecycle
+-- procedures and the read-only reporting user must not hold them
+-- (revoked on existing DBs by V023).
 GRANT EXECUTE ON pkg_tenant TO app_runtime;
-GRANT EXECUTE ON pkg_tenant TO app_reporting;

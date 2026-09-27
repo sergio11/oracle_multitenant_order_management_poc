@@ -165,6 +165,10 @@ CREATE OR REPLACE PACKAGE BODY pkg_inventory AS
 END pkg_inventory;
 /
 
--- Grant execute to runtime user (least privilege, SRS 58/59)
--- NOTE (C2): app_reporting is read-only - no EXECUTE here (see V019).
-GRANT EXECUTE ON pkg_inventory TO app_runtime;
+-- NOTE (closure fix, V023): the former `GRANT EXECUTE ON pkg_inventory
+-- TO app_runtime` is removed. app_runtime never calls this package
+-- directly (all production stock movement is internal to the
+-- definer-rights pkg_order_management calls); the only direct caller
+-- was the concurrency test setup, which now runs as APP_OWNER. Keeping
+-- the grant would re-expose the set_test_stock backdoor to runtime
+-- sessions on every package deploy.

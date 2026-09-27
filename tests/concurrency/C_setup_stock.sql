@@ -2,7 +2,9 @@
 -- Concurrency test: stock setup
 --
 -- Resets one product/warehouse to an exact quantity before launching
--- the parallel workers. Run as APP_RUNTIME (needs VPD context).
+-- the parallel workers. Run as APP_OWNER (closure fix: APP_RUNTIME no
+-- longer holds EXECUTE on pkg_inventory, so the set_test_stock helper
+-- is only reachable by the schema owner - V023).
 --
 -- Args:
 --   &1 p_tenant_id
@@ -14,7 +16,7 @@
 SET SERVEROUTPUT ON
 WHENEVER SQLERROR EXIT SQL.SQLCODE
 
--- Run as APP_RUNTIME: resolve unqualified names against the owner schema.
+-- Run as APP_OWNER: resolve unqualified names against the owner schema.
 ALTER SESSION SET CURRENT_SCHEMA = APP_OWNER;
 
 DEFINE p_tenant_id    = &1
