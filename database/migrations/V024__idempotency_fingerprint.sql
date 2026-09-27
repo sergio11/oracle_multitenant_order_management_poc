@@ -1,0 +1,17 @@
+--=====================================================================
+-- V024 - IDEMPOTENCY_KEY.request_fingerprint (closure fix C4)
+--
+-- Binds each idempotency record to the request it executed: the Java
+-- layer stores a SHA-256 hex digest (64 chars) of the operation's
+-- canonical parameters (order/customer ids, amounts, refs, reason).
+-- A retry with the same key but DIFFERENT parameters is then a hard
+-- 409 IDEMPOTENCY_KEY_CONFLICT instead of a silent replay - the money
+-- case this closes is register_payment(amount=A) retried with
+-- (amount=B), where replaying the first response would falsely report
+-- the second payment as executed.
+--
+-- Nullable on purpose: rows committed before this migration (and the
+-- CREATE_ORDER check in OrderService) stay valid; resolution skips the
+-- fingerprint comparison when either side is NULL (legacy semantics).
+--=====================================================================
+ALTER TABLE idempotency_key ADD (request_fingerprint VARCHAR2(64));

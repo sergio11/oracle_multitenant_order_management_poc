@@ -29,12 +29,13 @@ import java.util.function.Supplier;
  *                  executor - a failed action rolls the whole transaction
  *                  back, PENDING row included).
  *
- * Key binding: a key is bound to operation+aggregate (misuse -> 409), except
- * that the CREATE_ORDER sentinel aggregate (0: the order does not exist when
- * the key is first seen) matches any stored aggregate. Same-param retries
- * then replay normally; cross-param reuse is rejected by the caller's
- * request fingerprint (customer+currency checked in OrderService), never by
- * silently returning the first order.
+ * Key binding: a key is bound to operation+aggregate+request fingerprint
+ * (misuse -> 409), except that the CREATE_ORDER sentinel aggregate (0: the
+ * order does not exist when the key is first seen) matches any stored
+ * aggregate. Same-param retries then replay normally; cross-param reuse is
+ * rejected by the fingerprint comparison below (V024, closure fix C4) and
+ * additionally for creates by the caller's customer+currency check in
+ * OrderService - never by silently returning the first response.
  *
  * Completion backfills the real aggregate id from the action's response, so
  * even payload-less replays can fall back to findById for creates.
@@ -65,9 +66,17 @@ public class IdempotentOperationExecutor {
     }
 
     public OrderView execute(Long tenantId, String idempotencyKey, String operation,
-                                 Long aggregateId, Supplier<OrderView> action) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+                                  Long aggregateId, String requestFingerprint,
+                                  Supplier<OrderView> action) {
+        if (idempotencyKey == null) {
             return action.get();
+        }
+        // Closure fix (C5): a present-but-blank key is malformed, not
+        // "no idempotency requested". Running it non-idempotently would be a
+        // silent guarantee drop, so it is a hard 400 like an over-long key.
+        if (idempotencyKey.isBlank()) {
+            throw new BusinessException("INVALID_IDEMPOTENCY_KEY",
+                    "Idempotency-Key must not be blank");
         }
         if (idempotencyKey.length() > MAX_KEY_LENGTH) {
             throw new BusinessException("INVALID_IDEMPOTENCY_KEY",
@@ -75,22 +84,26 @@ public class IdempotentOperationExecutor {
         }
         var existing = idempotencyStore.findByKey(tenantId, idempotencyKey);
         if (existing.isPresent()) {
-            return resolve(tenantId, idempotencyKey, existing.get(), operation, aggregateId, action);
+            return resolve(tenantId, idempotencyKey, existing.get(), operation, aggregateId,
+                    requestFingerprint, action);
         }
-        if (!idempotencyStore.insertPending(tenantId, idempotencyKey, operation, aggregateId)) {
+        if (!idempotencyStore.insertPending(tenantId, idempotencyKey, operation, aggregateId,
+                requestFingerprint)) {
             var raced = idempotencyStore.findByKey(tenantId, idempotencyKey);
             if (raced.isEmpty()) {
                 throw new BusinessException("IDEMPOTENCY_RACE_CONFLICT",
                         "Concurrent request in flight for this idempotency key");
             }
-            return resolve(tenantId, idempotencyKey, raced.get(), operation, aggregateId, action);
+            return resolve(tenantId, idempotencyKey, raced.get(), operation, aggregateId,
+                    requestFingerprint, action);
         }
         return complete(tenantId, idempotencyKey, aggregateId, action);
     }
 
     private OrderView resolve(Long tenantId, String idempotencyKey, IdempotencyRecord record,
-                                  String operation, Long aggregateId, Supplier<OrderView> action) {
-        validateKeyMatches(record, idempotencyKey, operation, aggregateId);
+                                   String operation, Long aggregateId, String requestFingerprint,
+                                   Supplier<OrderView> action) {
+        validateKeyMatches(record, idempotencyKey, operation, aggregateId, requestFingerprint);
         if ("COMPLETED".equals(record.status())) {
             return replay(tenantId, record);
         }
@@ -151,13 +164,26 @@ public class IdempotentOperationExecutor {
     }
 
     private void validateKeyMatches(IdempotencyRecord record, String idempotencyKey,
-                                     String operation, Long aggregateId) {
+                                      String operation, Long aggregateId,
+                                      String requestFingerprint) {
         if (!Objects.equals(operation, record.operation())
                 || (!isAggregateSentinel(aggregateId)
                         && !Objects.equals(aggregateId, record.aggregateId()))) {
             throw new BusinessException("IDEMPOTENCY_KEY_CONFLICT",
                     "Idempotency key '" + truncate(idempotencyKey) + "' was already used for a "
                             + "different operation or order; it cannot be reused");
+        }
+        // Closure fix (C4): same key, same operation, same aggregate, but
+        // DIFFERENT request parameters (e.g. payment amount B retried with
+        // the key of payment amount A). Replaying the stored response would
+        // falsely report the new request as executed, so key reuse is a
+        // hard 409. Rows committed before V024 carry a NULL fingerprint
+        // (legacy rows) and skip this check.
+        if (requestFingerprint != null && record.requestFingerprint() != null
+                && !requestFingerprint.equals(record.requestFingerprint())) {
+            throw new BusinessException("IDEMPOTENCY_KEY_CONFLICT",
+                    "Idempotency key '" + truncate(idempotencyKey) + "' was already used for a "
+                            + "different request; it cannot be reused");
         }
     }
 

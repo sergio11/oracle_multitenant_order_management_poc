@@ -4,7 +4,8 @@ import java.util.Optional;
 
 public interface IdempotencyStore {
     Optional<IdempotencyRecord> findByKey(Long tenantId, String idempotencyKey);
-    boolean insertPending(Long tenantId, String idempotencyKey, String operation, Long aggregateId);
+    boolean insertPending(Long tenantId, String idempotencyKey, String operation,
+                          Long aggregateId, String requestFingerprint);
 
     /**
      * Flips the record to COMPLETED, backfills the real aggregate id and
@@ -17,5 +18,11 @@ public interface IdempotencyStore {
      */
     int markCompleted(Long tenantId, String idempotencyKey, Long aggregateId, String responsePayload);
 
-    record IdempotencyRecord(Long aggregateId, String operation, String status, String responsePayload) {}
+    /**
+     * Binds a key to operation+aggregate+request. {@code requestFingerprint}
+     * is the caller's digest of the canonical request parameters (V024):
+     * a NULL stored value means "legacy row, skip the check".
+     */
+    record IdempotencyRecord(Long aggregateId, String operation, String status,
+                             String responsePayload, String requestFingerprint) {}
 }

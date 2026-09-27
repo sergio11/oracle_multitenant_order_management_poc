@@ -36,6 +36,7 @@ class IdempotencyDaoTest {
                     when(rs.getString("operation")).thenReturn("CONFIRM_ORDER");
                     when(rs.getString("status")).thenReturn("COMPLETED");
                     when(rs.getString("response_payload")).thenReturn("{\"status\":\"CONFIRMED\"}");
+                    when(rs.getString("request_fingerprint")).thenReturn("fp-abc");
                     return extractor.extractData(rs);
                 });
 
@@ -46,6 +47,7 @@ class IdempotencyDaoTest {
         assertEquals("CONFIRM_ORDER", result.get().operation());
         assertEquals("COMPLETED", result.get().status());
         assertEquals("{\"status\":\"CONFIRMED\"}", result.get().responsePayload());
+        assertEquals("fp-abc", result.get().requestFingerprint());
     }
 
     @Test
@@ -64,21 +66,21 @@ class IdempotencyDaoTest {
 
     @Test
     void shouldInsertPendingAndReturnTrue() {
-        when(jdbcTemplate.update(anyString(), eq(9L), eq("key-1"), eq("CONFIRM_ORDER"), eq(1L)))
+        when(jdbcTemplate.update(anyString(), eq(9L), eq("key-1"), eq("CONFIRM_ORDER"), eq(1L), eq("fp-1")))
                 .thenReturn(1);
 
-        assertTrue(idempotencyDao.insertPending(9L, "key-1", "CONFIRM_ORDER", 1L));
+        assertTrue(idempotencyDao.insertPending(9L, "key-1", "CONFIRM_ORDER", 1L, "fp-1"));
 
-        verify(jdbcTemplate).update(contains("idempotency_key"), eq(9L), eq("key-1"),
-                eq("CONFIRM_ORDER"), eq(1L));
+        verify(jdbcTemplate).update(contains("request_fingerprint"), eq(9L), eq("key-1"),
+                eq("CONFIRM_ORDER"), eq(1L), eq("fp-1"));
     }
 
     @Test
     void shouldReturnFalseOnDuplicateKey() {
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenThrow(new DuplicateKeyException("duplicate"));
 
-        assertFalse(idempotencyDao.insertPending(9L, "key-1", "CONFIRM_ORDER", 1L));
+        assertFalse(idempotencyDao.insertPending(9L, "key-1", "CONFIRM_ORDER", 1L, "fp-1"));
     }
 
     @Test

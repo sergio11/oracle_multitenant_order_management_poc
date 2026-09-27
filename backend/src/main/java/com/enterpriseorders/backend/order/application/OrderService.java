@@ -16,6 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Objects;
 
 @Service
@@ -45,7 +48,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     public OrderView createOrder(Long customerId, String currency, String idempotencyKey) {
         Long tenantId = currentTenantId();
         OrderView result = idempotentExecutor.execute(tenantId, idempotencyKey, "CREATE_ORDER",
-                CREATE_AGGREGATE_ID,
+                CREATE_AGGREGATE_ID, fingerprint("CREATE_ORDER", customerId, currency),
             () -> {
                 Long orderId = orderRepository.create(tenantId, customerId, currency);
                 return orderRepository.findById(tenantId, orderId);
@@ -82,6 +85,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
     public OrderView confirmOrder(Long orderId, String idempotencyKey) {
         Long tenantId = currentTenantId();
         return idempotentExecutor.execute(tenantId, idempotencyKey, "CONFIRM_ORDER", orderId,
+            fingerprint("CONFIRM_ORDER", orderId),
             () -> {
                 OrderView current = orderRepository.findById(tenantId, orderId);
                 OrderStatus status = OrderStatus.fromString(current.status());
@@ -103,6 +107,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                     "Cancellation reason is required");
         }
         return idempotentExecutor.execute(tenantId, idempotencyKey, "CANCEL_ORDER", orderId,
+            fingerprint("CANCEL_ORDER", orderId, reason),
             () -> {
                 OrderView current = orderRepository.findById(tenantId, orderId);
                 OrderStatus status = OrderStatus.fromString(current.status());
@@ -126,6 +131,7 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                                          String paymentMethod, String idempotencyKey) {
         Long tenantId = currentTenantId();
         return idempotentExecutor.execute(tenantId, idempotencyKey, "PAYMENT", orderId,
+            fingerprint("PAYMENT", orderId, paymentRef, amount, currency, paymentMethod),
             () -> {
                 OrderView current = orderRepository.findById(tenantId, orderId);
                 OrderStatus status = OrderStatus.fromString(current.status());
@@ -153,5 +159,32 @@ public class OrderService implements CreateOrderUseCase, AddOrderLineUseCase,
                     "Tenant context not set");
         }
         return tenantId;
+    }
+
+    /**
+     * Request fingerprint for idempotency (V024, closure fix C4). SHA-256
+     * hex over the canonical request parameters, unit-separated so
+     * ("AB","C") and ("A","BC") can never collide. A retry with the same
+     * key but different params gets a different fingerprint and the
+     * executor rejects it with IDEMPOTENCY_KEY_CONFLICT instead of
+     * replaying the first response.
+     */
+    private static String fingerprint(Object... parts) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            StringBuilder hex = new StringBuilder(64);
+            for (Object part : parts) {
+                String text = part == null ? "" : part.toString();
+                digest.update(text.getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0x1F);
+            }
+            for (byte b : digest.digest()) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable for idempotency fingerprint", e);
+        }
     }
 }

@@ -26,27 +26,28 @@ public class IdempotencyDao implements IdempotencyStore {
     @Override
     public Optional<IdempotencyRecord> findByKey(Long tenantId, String idempotencyKey) {
         return jdbcTemplate.query(
-                "SELECT aggregate_id, operation, status, response_payload " +
+                "SELECT aggregate_id, operation, status, response_payload, request_fingerprint " +
                 "FROM idempotency_key WHERE tenant_id = ? AND idempotency_key = ?",
                 rs -> rs.next()
                         ? Optional.of(new IdempotencyRecord(
                                 rs.getLong("aggregate_id"),
                                 rs.getString("operation"),
                                 rs.getString("status"),
-                                rs.getString("response_payload")))
+                                rs.getString("response_payload"),
+                                rs.getString("request_fingerprint")))
                         : Optional.empty(),
                 tenantId, idempotencyKey);
     }
 
     @Override
     public boolean insertPending(Long tenantId, String idempotencyKey,
-                                 String operation, Long aggregateId) {
+                                 String operation, Long aggregateId, String requestFingerprint) {
         try {
             jdbcTemplate.update(
                     "INSERT INTO idempotency_key " +
-                    "(tenant_id, idempotency_key, operation, aggregate_id, status) " +
-                    "VALUES (?, ?, ?, ?, 'PENDING')",
-                    tenantId, idempotencyKey, operation, aggregateId);
+                    "(tenant_id, idempotency_key, operation, aggregate_id, status, request_fingerprint) " +
+                    "VALUES (?, ?, ?, ?, 'PENDING', ?)",
+                    tenantId, idempotencyKey, operation, aggregateId, requestFingerprint);
             return true;
         } catch (org.springframework.dao.DuplicateKeyException e) {
             return false;
