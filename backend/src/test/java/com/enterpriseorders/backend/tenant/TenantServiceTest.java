@@ -44,9 +44,9 @@ class TenantServiceTest {
         when(tenantRepository.findActiveTenantIdByCode("ACME")).thenReturn(Optional.of(1L));
         assertEquals(1L, tenantService.resolveActiveTenantId("ACME"));
     }
-
     @Test
     void shouldThrowTenantAccessDeniedWhenResolvingUnknownCode() {
+
         when(tenantRepository.findActiveTenantIdByCode("UNKNOWN")).thenReturn(Optional.empty());
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> tenantService.resolveActiveTenantId("UNKNOWN"));
@@ -54,5 +54,22 @@ class TenantServiceTest {
         // code exists (401), unlike the persistence 404 for absent records.
         assertEquals("TENANT_ACCESS_DENIED", ex.getCode());
         assertEquals(401, GlobalExceptionHandler.statusFor(ex.getCode()).value());
+    }
+
+    @Test
+    void shouldNormalizeTenantCodeToUppercaseOnCreate() {
+        // Closure fix: resolution is case-insensitive (filter uppercases),
+        // so a verbatim lowercase code would provision an unreachable
+        // tenant. NewTenant normalizes at the application boundary.
+        var request = new NewTenant(" acme ", "Acme Corp", "STANDARD", "SHARED_SCHEMA");
+        assertEquals("ACME", request.tenantCode());
+
+        when(tenantRepository.create(request)).thenReturn(1L);
+        when(tenantRepository.findById(1L)).thenReturn(new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
+        tenantService.createTenant(request);
+
+        var captor = org.mockito.ArgumentCaptor.forClass(NewTenant.class);
+        verify(tenantRepository).create(captor.capture());
+        assertEquals("ACME", captor.getValue().tenantCode());
     }
 }

@@ -6,6 +6,13 @@ package com.enterpriseorders.backend.tenant.model;
  * <p>Mirrors the web-facing {@code dto.TenantRequest} field-for-field
  * (validation stays on the DTO at the edge). The controller maps the
  * request DTO to this type before calling the input port.
+ *
+ * <p>Closure fix: {@code tenantCode} is normalized here (trim + upper
+ * case), the single choke point every write path goes through. Tenant
+ * resolution (filter, allowlist, {@code TenantDao}) is case-insensitive
+ * by design, so persisting a code verbatim (e.g. {@code "acme"}) used
+ * to create a tenant that could never be reached - uniqueness is
+ * case-sensitive in Oracle while every read uppercases first.
  */
 public record NewTenant(
         String tenantCode,
@@ -13,4 +20,7 @@ public record NewTenant(
         String tier,
         String isolationMode
 ) {
+    public NewTenant {
+        tenantCode = tenantCode == null ? null : tenantCode.trim().toUpperCase();
+    }
 }
