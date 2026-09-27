@@ -11,7 +11,12 @@
 -- Run as APP_OWNER after V011 migration + package deployment:
 --   sqlplus app_owner/<pwd>@//localhost:1521/pdb_oltp @database/security/apply_vpd_policies.sql
 --
--- NOTE: Reflects the exact policy set that V011 migration also creates.
+-- NOTE: Reflects the exact policy set that migrations V011 + V014 + V015
+-- create (13 base tables + idempotency key + 2 reporting MVs), kept in
+-- sync with database/security/verify_vpd_policies.sql (16/16).
+-- Closure fix (S5): earlier revisions asserted only the 14 non-MV
+-- policies, so running this script as a repair after an MV rebuild
+-- reported success while reporting stayed cross-tenant open.
 --
 -- H1 (exception safety): the historical shape of this script was
 -- "drop every policy, then add every policy". A failure in the ADD
@@ -45,6 +50,9 @@ BEGIN
     -- IDEMPOTENCY_KEY table exists only after V012; ignore if absent
     BEGIN DBMS_RLS.DROP_POLICY('APP_OWNER','IDEMPOTENCY_KEY','POL_IDEMP_TENANT');      EXCEPTION WHEN OTHERS THEN NULL; END;
     BEGIN DBMS_RLS.DROP_POLICY('APP_OWNER','AUDIT_EVENT','POL_AUDIT_TENANT');          EXCEPTION WHEN OTHERS THEN NULL; END;
+    -- Reporting MVs exist only after V013; ignore if absent
+    BEGIN DBMS_RLS.DROP_POLICY('APP_OWNER','MV_ORDER_DAILY_SUMMARY','POL_MV_ORDER_TENANT');   EXCEPTION WHEN OTHERS THEN NULL; END;
+    BEGIN DBMS_RLS.DROP_POLICY('APP_OWNER','MV_PRODUCT_SALES_SUMMARY','POL_MV_PRODUCT_TENANT'); EXCEPTION WHEN OTHERS THEN NULL; END;
 END;
 /
 
@@ -69,6 +77,9 @@ BEGIN
     DBMS_RLS.ADD_POLICY('APP_OWNER','OUTBOX_EVENT',      'POL_OUTBOX_TENANT',  'APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
     DBMS_RLS.ADD_POLICY('APP_OWNER','IDEMPOTENCY_KEY','POL_IDEMP_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
     DBMS_RLS.ADD_POLICY('APP_OWNER','AUDIT_EVENT','POL_AUDIT_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
+    -- Reporting MV policies are SELECT-only (same as V014).
+    DBMS_RLS.ADD_POLICY('APP_OWNER','MV_ORDER_DAILY_SUMMARY','POL_MV_ORDER_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT',FALSE);
+    DBMS_RLS.ADD_POLICY('APP_OWNER','MV_PRODUCT_SALES_SUMMARY','POL_MV_PRODUCT_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT',FALSE);
 EXCEPTION
     WHEN OTHERS THEN
         -- COMPENSATION: restore the full policy set (tolerating
@@ -116,6 +127,12 @@ EXCEPTION
         BEGIN
             DBMS_RLS.ADD_POLICY('APP_OWNER','AUDIT_EVENT','POL_AUDIT_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT,INSERT,UPDATE,DELETE',TRUE);
         EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','MV_ORDER_DAILY_SUMMARY','POL_MV_ORDER_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT',FALSE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN
+            DBMS_RLS.ADD_POLICY('APP_OWNER','MV_PRODUCT_SALES_SUMMARY','POL_MV_PRODUCT_TENANT','APP_OWNER','PKG_VPD.TENANT_PREDICATE','SELECT',FALSE);
+        EXCEPTION WHEN OTHERS THEN NULL; END;
         RAISE;
 END;
 /
@@ -133,17 +150,18 @@ BEGIN
       INTO v_missing
       FROM all_policies
      WHERE object_owner = 'APP_OWNER'
-       AND policy_name IN ('POL_CUSTOMER_TENANT','POL_ADDR_TENANT','POL_ACCT_TENANT',
-                           'POL_CATEGORY_TENANT','POL_PRODUCT_TENANT','POL_WAREHOUSE_TENANT',
-                           'POL_INVENTORY_TENANT','POL_ORDER_TENANT','POL_LINE_TENANT',
-                           'POL_HISTORY_TENANT','POL_PAYMENT_TENANT','POL_OUTBOX_TENANT',
-                           'POL_IDEMP_TENANT','POL_AUDIT_TENANT');
+        AND policy_name IN ('POL_CUSTOMER_TENANT','POL_ADDR_TENANT','POL_ACCT_TENANT',
+                            'POL_CATEGORY_TENANT','POL_PRODUCT_TENANT','POL_WAREHOUSE_TENANT',
+                            'POL_INVENTORY_TENANT','POL_ORDER_TENANT','POL_LINE_TENANT',
+                            'POL_HISTORY_TENANT','POL_PAYMENT_TENANT','POL_OUTBOX_TENANT',
+                            'POL_IDEMP_TENANT','POL_AUDIT_TENANT',
+                            'POL_MV_ORDER_TENANT','POL_MV_PRODUCT_TENANT');
 
-    IF v_missing <> 14 THEN
+    IF v_missing <> 16 THEN
         RAISE_APPLICATION_ERROR(-20931,
-            'VPD apply incomplete: expected 14 policies, found ' || v_missing);
+            'VPD apply incomplete: expected 16 policies, found ' || v_missing);
     END IF;
 
-    DBMS_OUTPUT.PUT_LINE('VPD policies applied successfully (14/14).');
+    DBMS_OUTPUT.PUT_LINE('VPD policies applied successfully (16/16).');
 END;
 /
