@@ -50,8 +50,12 @@ public class CredentialHardeningCheck {
 
     /**
      * Strict when the {@code prod} profile is active, or when the active
-     * profiles are anything other than local/test (e.g. staging). An empty
+     * profiles are anything other than local (e.g. staging, test). An empty
      * profile set is treated as non-strict (local developer default).
+     *
+     * <p>NOTE: there is no {@code application-test.yml} in this POC - the
+     * obsolete "test" profile is deliberately treated as strict, like any
+     * unknown non-local profile.
      */
     public boolean isStrict() {
         String[] active = environment.getActiveProfiles();
@@ -62,7 +66,7 @@ public class CredentialHardeningCheck {
         if (profiles.contains("prod")) {
             return true;
         }
-        return profiles.stream().noneMatch(p -> "local".equals(p) || "test".equals(p));
+        return profiles.stream().noneMatch("local"::equals);
     }
 
     public void verify(boolean strict, String adminPw, String operatorPw) {

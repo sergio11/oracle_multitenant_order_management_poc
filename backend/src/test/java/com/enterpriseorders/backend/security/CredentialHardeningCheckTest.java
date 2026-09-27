@@ -39,12 +39,14 @@ class CredentialHardeningCheckTest {
     @Test
     void unknownProfileIsStrict() {
         assertTrue(check("staging").isStrict());
+        // No application-test.yml exists in this POC: the obsolete "test"
+        // alias is strict like any unknown non-local profile.
+        assertTrue(check("test").isStrict());
     }
 
     @Test
-    void localAndTestProfilesAreNotStrict() {
+    void localProfileIsNotStrict() {
         assertFalse(check("local").isStrict());
-        assertFalse(check("test").isStrict());
         assertFalse(check().isStrict());
     }
 

@@ -3,7 +3,7 @@ spring:
     activate:
       on-profile: prod
   flyway:
-    # ADR-009: schema bootstrap is external (mvn flyway:migrate as APP_OWNER
+    # Schema bootstrap is external (mvn flyway:migrate as APP_OWNER
     # + deploy_packages.sql). Never auto-migrate from the runtime artifact:
     # classpath:db/migration does not exist in the image.
     enabled: false
@@ -36,8 +36,6 @@ app:
       operator-allowed-tenants: ${APP_OPERATOR_TENANTS:ACME}
 
 management:
-  server:
-    port: 8081
   endpoints:
     web:
       base-path: /internal

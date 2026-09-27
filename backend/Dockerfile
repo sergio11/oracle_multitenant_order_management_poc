@@ -27,7 +27,6 @@ WORKDIR /app
 COPY --from=build /workspace/target/backend-0.0.1-SNAPSHOT.jar app.jar
 
 EXPOSE 8080
-EXPOSE 8081
 
 # NOTE: actuator base-path is /internal (see application.yml), not /actuator.
 # start-period gives the JVM time to boot before curl failures count.
