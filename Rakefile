@@ -852,8 +852,9 @@ namespace :qa do
       check.call('POST /orders (operator)', false, e.message)
     end
 
-    # 4) Idempotency-Key is honored by confirm/payment (FR-014), NOT by
-    # creation. Make the order confirmable (add a seed line), confirm it
+    # 4) Idempotency-Key is honored by create/confirm/cancel/payment
+    # (FR-014); this step demonstrates it on confirm. Make the order
+    # confirmable (add a seed line), confirm it
     # with key K (2xx leaves a COMPLETED record), then reuse K for a
     # DIFFERENT order -> 409 IDEMPOTENCY_KEY_CONFLICT. Note: a FAILED
     # confirm rolls back (no record left), so r1 must succeed.

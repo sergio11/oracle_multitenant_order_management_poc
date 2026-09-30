@@ -9,5 +9,8 @@ Index:
 | R03 | `R03_pool_exhaustion.md` | Manual/limits procedure (lab cannot truly exhaust — honest scope) | Read + follow steps |
 | R04 | `R04_vpd_policy_absence.sql` | Fail-loud VPD gap detection (wraps `verify_vpd_policies.sql`) | `sqlplus app_owner/... @tests/resilience/R04_vpd_policy_absence.sql` |
 
-Lab vs procedural: R01/R02/R04 were designed for the local/kind lab but are
-UNEXECUTED in this pass (no live run claimed); R03 is procedural by design.
+Lab vs procedural: the FT-001 *scenario* (DB outage → controlled 503,
+Unready-no-restart, recovery) WAS executed manually on kind via the
+`kubectl scale statefulset oracle` procedure documented in the root
+README QA section — the R01/R02 `.bat` wrappers themselves are UNEXECUTED
+in this pass (no scripted run claimed); R03 is procedural by design.

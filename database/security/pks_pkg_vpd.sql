@@ -1,4 +1,11 @@
 --=====================================================================
+-- *** REFERENCE ONLY - NOT DEPLOYED BY deploy_packages.sql ***
+-- The LIVE definition of pkg_vpd (spec + body) is created solely by
+-- the Flyway migration database/migrations/V011__create_vpd.sql.
+-- database/packages/deploy_packages.sql does NOT include this file, so
+-- editing it has NO effect. If you change anything here, change V011
+-- too (or edit V011 only and treat this file as a readable copy).
+--=====================================================================
 -- PKG_VPD - Package specification
 --
 -- VPD predicate function provider (SRS 14).
