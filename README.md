@@ -38,7 +38,7 @@ graph TB
         TenantFilter["🔍 TenantContextFilter<br/>X-Tenant-ID → ThreadLocal"]
 
         Controllers["📡 REST Controllers<br/>Tenant · Order · Reporting"]
-        Services["⚙️ Application Services<br/>Use Case Interfaces (11)"]
+        Services["⚙️ Application Services<br/>Use Case Interfaces (13)"]
         Adapters["🗃️ Infrastructure Adapters<br/>DAOs · DataSource · RateLimiter"]
     end
 
@@ -124,7 +124,7 @@ Unlike traditional CRUD-over-HTTP architectures, this POC pushes business logic 
 
 ### 🔐 Multi-Tenancy at the Database Layer
 
-Oracle VPD (Virtual Private Database) / DBMS_RLS provides **invisible, fail-closed tenant isolation** at the database level. Every SQL statement is automatically filtered by tenant — no application code can accidentally leak data across tenants. The predicate `SYS_CONTEXT('APP_CTX','TENANT_ID') = tenant_id` is enforced on all 14 tenant-aware tables, including materialized views.
+Oracle VPD (Virtual Private Database) / DBMS_RLS provides **invisible, fail-closed tenant isolation** at the database level. Every SQL statement is automatically filtered by tenant — no application code can accidentally leak data across tenants. The predicate `SYS_CONTEXT('APP_CTX','TENANT_ID') = tenant_id` is enforced on all 14 tenant-aware tables plus both materialized views (16 VPD objects).
 
 ### 🔗 Connection Pooling Without ORM
 
@@ -144,15 +144,15 @@ Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inven
 |---|---|
 | 🔐 **Database-level multi-tenancy** | VPD/DBMS_RLS on 16 objects — invisible, fail-closed isolation. No application code can leak cross-tenant data. |
 | ⚡ **Atomic business logic** | PL/SQL `confirm_order` procedure: validates + locks + reserves + transitions + audits + outbox in one transaction. Java domain deleted — PL/SQL is the single authority. |
-| 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (15 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral model types (`OrderView`, `TenantView`); controllers map to DTOs (wire JSON unchanged). Error-code→HTTP mapping lives only in `GlobalExceptionHandler`. |
-| 🔄 **Idempotent operations** | Create/confirm/cancel/payment accept `Idempotency-Key`; replay returns the ORIGINAL stored payload; PENDING→409, FAILED→re-execute. |
+| 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (15 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral model types (`OrderView`, `TenantView`); controllers map to DTOs (wire JSON unchanged). Error-code→HTTP mapping is centralized in `GlobalExceptionHandler` (the tenant filter serializes its own path errors through `statusFor`). |
+| 🔄 **Idempotent operations** | Create/confirm/cancel/payment accept `Idempotency-Key`; a replayed key returns the stored response (payloads ≤ 4000 chars — larger ones fall back to a current-state re-read); a concurrent duplicate blocks on the unique key until the winner commits, then replays (the in-flight `PENDING` row is never visible outside its transaction). |
 | 📦 **Transactional outbox** | Outbox events written atomically by PL/SQL within the same transaction as business mutations. Publisher/relayer is out of POC scope (see Known Limitations). |
 | 🛡️ **Pessimistic locking** | `SELECT FOR UPDATE` on inventory prevents overselling. Concurrency test proves exactly-1-of-N success with stock=1. |
 | 👤 **Least privilege** | Three Oracle users: `APP_OWNER` (DDL), `APP_RUNTIME` (DML via packages + idempotency only), `APP_REPORTING` (read-only: SELECT + tenant/VPD + refresh proc). |
 | 📊 **Materialized Views** | OLTP-reporting separation via `MV_ORDER_DAILY_SUMMARY` and `MV_PRODUCT_SALES_SUMMARY` with on-demand refresh. |
 | 🔭 **Observability** | Correlation ID propagation, structured JSON logging, Prometheus metrics via Micrometer. |
 | 🔗 **Connection pooling** | Oracle UCP with validation-on-borrow, connection timeouts, and automatic tenant context setup/cleanup. |
-| ⚙️ **Profile-based config** | Local/test/prod profiles with externalized secrets via environment variables. |
+| ⚙️ **Profile-based config** | Local/prod profiles with externalized secrets via environment variables. |
 
 ### ⚠️ Weaknesses / Tradeoffs
 
@@ -224,7 +224,7 @@ flowchart LR
     style I fill:#e74c3c,color:#fff
 ```
 
-This means even a SQL injection vulnerability cannot leak cross-tenant data.
+This means a statement with a missing or forged tenant context returns zero rows (fail-closed), and the predicate only accepts a numeric value — so SQL injection against a VPD-protected table cannot read another tenant's data unless the injection can also execute arbitrary PL/SQL to set a session context. The complementary control — binding each principal to its allowed tenants (`operator-allowed-tenants`) — is enforced at the application boundary.
 
 ### 🔄 Idempotency at the Database Level (SRS §62, FR-014)
 
@@ -318,7 +318,7 @@ Tenant isolation is enforced at the database level using Oracle VPD/DBMS_RLS:
 - 🔒 **Fail-closed predicate**: Without `SYS_CONTEXT('APP_CTX','TENANT_ID')`, queries return zero rows
 - 🤖 **Automatic filtering**: Every SQL statement (SELECT, INSERT, UPDATE, DELETE) is filtered by tenant
 - 📊 **Materialized views** carry VPD policies without `sec_relevant_cols` — always applied
-- 🛡️ **Defense-in-depth**: Even SQL injection cannot leak cross-tenant data
+- 🛡️ **Defense-in-depth**: injection against a VPD-protected table yields zero rows without a valid numeric context; principal↔tenant binding (the complementary control) is enforced at the application boundary
 
 ### 📋 Order Lifecycle Management
 
@@ -365,9 +365,9 @@ Pessimistic locking prevents overselling:
 Critical operations are idempotent via `idempotency_key` table:
 
 - 📨 `create`, `confirm`, `cancel` and `register_payment` accept `Idempotency-Key` header (create returns `201` + `Location`); `OrderResponse` carries `lines` and no `tenantId`; cancel rejects `SHIPPED` (409) and blank reason (400)
-- 📝 First execution: insert PENDING → execute → mark COMPLETED (all in one transaction); the status check happens **inside** the idempotent action
-- 🔁 Retry with the same key returns the cached result without re-execution
-- 🔒 Key is bound to **operation + aggregateId** — misuse returns `409 IDEMPOTENCY_KEY_CONFLICT`; unique constraint per tenant prevents race conditions
+- 📝 First execution: insert PENDING → execute → mark COMPLETED (**all in one transaction** — the `PENDING` row is never observable by other sessions, and the whole lifecycle assumes the caller opened that transaction, see Known Limitations); the status check happens **inside** the idempotent action
+- 🔁 Retry with the same key returns the stored result without re-execution (payload ≤ 4000 chars; larger payloads are not stored and fall back to a current-state re-read)
+- 🔒 Key is bound to **operation + aggregateId** — misuse returns `409 IDEMPOTENCY_KEY_CONFLICT`; unique constraint per tenant means a concurrent duplicate waits on the index (no fast 409 for in-flight keys), then replays or conflicts
 
 ### 📦 Transactional Outbox Pattern
 
@@ -688,7 +688,7 @@ rake qa:wait && rake qa:smoke   # recovery check
 ### QA lessons (also in Known Limitations)
 
 - 🌱 Seed requires package bodies deployed **first** (`qa:db:init` order): only the designated package may touch `APP_CTX` (ORA-01031 otherwise). Seed ends with explicit `COMMIT` (never rely on client exit-commit).
-- 🔑 Seed IDs are **not deterministic** (identity columns): suites resolve tenant/customer/product/warehouse **by business code**, never by hardcoded `1`.
+- 🔑 Seed IDs are **not deterministic** (identity columns): the SQL suites and `rake qa:db:concurrency` resolve tenant/customer/product/warehouse **by business code**; the Windows concurrency `.bat` still defaults to seed IDs `1` (override via env vars).
 - 🩺 Probes: liveness = `/internal/health/liveness` (app-only), readiness = `/internal/health/readiness` (**includes `db`**). A DB outage makes the pod Unready without restarting it.
 - 🔄 `qa:wait` tracks the rollout (replica counts lie during rolling updates).
 - 🐳 kind nodes don't auto-start after a machine reboot: `podman start poc-qa-control-plane` (data survives on the PVC).
@@ -755,9 +755,10 @@ rake qa:wait && rake qa:smoke   # recovery check
 
 Honest boundaries of this POC:
 
-- 🚫 **CI runs unit tests only** — `.github/workflows/maven.yml` runs `mvn clean test` (no DB needed: DAO tests mock JDBC). DB integration (VPD verify, tenant isolation, order-to-payment) runs in the lab via `rake qa:db:verify`.
+- 🚫 **No CI pipeline in the repo** — run `mvn clean test` locally (255 tests, no DB needed: DAO tests mock JDBC). DB integration (VPD verify, tenant isolation, order-to-payment) runs in the lab via `rake qa:db:verify`.
 - 📦 **Outbox publisher not implemented** — no component polls `outbox_event` or marks events `PUBLISHED`; events stay `NEW`
 - 🌐 **Customer / Product / Inventory REST endpoints not implemented** (FR-004/005/006) — the API covers orders, tenants, and reports
+- 🔓 **Tenant activate/suspend (FR-002/FR-003) has no REST endpoint** — the procedures exist in `pkg_tenant` but nothing calls them; likewise AC-002 (create customer/product via API) is seed-only. The API implements FR-001 (provisioning) and the order-lifecycle FRs.
 - 🏁 **Order flow ends at CONFIRMED/PAID** — no `SHIPPED`/`COMPLETED` endpoints (the state machine shows the full target lifecycle)
 - 👤 **Tenant resolved from `X-Tenant-ID` header + in-memory users** — not from identity claims; an operator is bound to `operator-allowed-tenants` (default ACME; ADMIN any, else 403). Residual: not JWT/LDAP.
 - 🏗️ **GoldenGate / RAC / Data Guard not running locally** — enterprise target architecture is documented only (GG illustrative `.ggsci`; RAC/ASM/DG live out of scope on the single-node lab)
@@ -765,13 +766,14 @@ Honest boundaries of this POC:
 - 📄 **PL/SQL package sources duplicated** — specs exist both in V010 migrations and `database/packages/pks_*` (bodies in `pkb_*`); they must be kept in sync manually
 - 💎 **Java domain aggregate deleted** — PL/SQL (`pkg_order_management`) is the single authority; `PaymentMethod` kept as literal enum + consistency test
 - 🌱 **Seed order matters** — package bodies must be deployed before seeding (`qa:db:init` order): only `pkg_tenant` may touch `APP_CTX` (direct `DBMS_SESSION` calls raise ORA-01031); seed ends with an explicit `COMMIT`
-- 🔑 **Seed IDs are not deterministic** — identity columns vary per environment; suites resolve tenant/customer/product/warehouse by business code, never by hardcoded IDs
+- 🔑 **Seed IDs are not deterministic** — identity columns vary per environment; the SQL suites and `rake qa:db:concurrency` resolve tenant/customer/product/warehouse by business code; `tests/concurrency/*.bat` defaults still assume a fresh seed (IDs `1`) and must be overridden elsewhere
 - 🩺 **K8s probe split** — liveness is app-only while readiness includes `db`: a DB outage sheds traffic (Unready) without restarting the pod
 - 🐳 **kind nodes don't survive machine reboots** — recover with `podman start poc-qa-control-plane` (Oracle data survives on its PVC)
 - 🔄 **MV refresh limiter is per-JVM** — cooldown is not shared across app nodes (multi-node gap, documented)
 - 🔑 **Batch scripts use env vars with validation** (`DB_USER/DB_PASS/...` default to lab values with redacted warnings); rake secrets via temp env-file + redacted logs; remaining lab defaults (`LabRuntimePass1`, `changeme`) are local-only, prod requires env passwords
 - 🧹 **IT cleanup is two-layered** — the suite's own cleanup is best-effort by design (`APP_RUNTIME` holds no `DELETE` on business tables, least privilege), so a passing run leaves its `CONFIRMED+PAID` probe order behind; `rake qa:db:it` removes exactly that run's rows as `APP_OWNER` (children before parent) and releases its 2 reserved units (fixed `qty=2 PRD-001/WH1/ACME` probe). Manual runs leave residue — re-running the rake task does not clean previous manual runs.
 - ➕ **`POST /{id}/lines` accepts no `Idempotency-Key`** — a retried add-line inserts a second row (total is re-summed). Create/confirm/cancel/payment are idempotent; add-line callers must not blindly retry. A key or a unique `(order_id, product_id)` guard is backlog.
+- ⏳ **Idempotency assumes the caller's transaction** — `IdempotentOperationExecutor.execute` has no `@Transactional` of its own: all four current call sites are `@Transactional`, so PENDING→COMPLETED (or rollback) is atomic. Invoking it outside a transaction would commit a stuck `PENDING` key permanently (no TTL/sweeper by design, since the surrounding rollback is the cleanup). Also: payloads > 4000 chars are not stored, so their replay re-reads current state rather than the original response.
 - 🔀 **`TENANT_ACCESS_DENIED` (401) vs `TENANT_NOT_FOUND` (404)** — deliberate split: tenant resolution answers 401 without revealing whether a code exists (anti-enumeration); the persistence layer answers 404 for genuinely absent records. Same split documented in `GlobalExceptionHandler`.
 - 🧪 **No DB-backed Java tests** — DAO tests mock `JdbcTemplate`, so schema/SQL drift is caught by the lab suites (`rake qa:db:verify`), not by `mvn test`. A Testcontainers-Oracle suite is backlog.
 
