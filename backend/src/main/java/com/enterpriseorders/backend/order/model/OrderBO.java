@@ -6,13 +6,14 @@ import java.util.List;
 /**
  * Neutral read model for orders (A3).
  *
- * <p>Same shape as the web-facing {@code dto.OrderResponse} (field names and
+ * <p>Same shape as the web-facing {@code dto.OrderResponseDTO} (field names and
  * order identical, so idempotency JSON payloads stay interchangeable), but
  * free of web concerns: input/output ports, the application service and the
- * persistence adapters depend on this type, never on web DTOs. The controller
- * maps {@code OrderView} to {@code OrderResponse} at the edge.
+ * persistence adapters depend on this type, never on web DTOs. The web edge
+ * maps {@code OrderBO} to {@code OrderResponseDTO} with MapStruct
+ * ({@code adapter.web.mapper.OrderMapper}).
  */
-public record OrderView(
+public record OrderBO(
         Long orderId,
         String orderNumber,
         Long customerId,
@@ -20,13 +21,13 @@ public record OrderView(
         String currency,
         BigDecimal totalAmount,
         int version,
-        List<OrderLineView> lines
+        List<OrderLineBO> lines
 ) {
-    public OrderView {
+    public OrderBO {
         lines = lines == null ? List.of() : List.copyOf(lines);
     }
 
-    public record OrderLineView(
+    public record OrderLineBO(
             Long productId,
             Long quantity,
             BigDecimal unitPrice,

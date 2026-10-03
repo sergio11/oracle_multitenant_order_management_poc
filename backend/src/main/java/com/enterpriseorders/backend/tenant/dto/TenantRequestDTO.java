@@ -7,7 +7,7 @@ import jakarta.validation.constraints.Size;
 /**
  * Request payload for tenant provisioning (SRS FR-001, §53).
  */
-public record TenantRequest(
+public record TenantRequestDTO(
         @NotBlank @Size(max = 30) String tenantCode,
         @NotBlank @Size(max = 200) String name,
         @NotBlank @Pattern(regexp = "STANDARD|PREMIUM|ENTERPRISE") String tier,
@@ -16,7 +16,7 @@ public record TenantRequest(
         String isolationMode
 ) {
 
-    public TenantRequest {
+    public TenantRequestDTO {
         if (isolationMode == null || isolationMode.isBlank()) {
             isolationMode = "SHARED_SCHEMA";
         }

@@ -1,11 +1,11 @@
 package com.enterpriseorders.backend.order.port.output;
 
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.model.OrderBO;
 
 import java.math.BigDecimal;
 
 public interface OrderRepository {
-    OrderView findById(Long tenantId, Long orderId);
+    OrderBO findById(Long tenantId, Long orderId);
     Long create(Long tenantId, Long customerId, String currency);
     void addLine(Long tenantId, Long orderId, Long productId, Long quantity);
     void confirm(Long tenantId, Long orderId, String actor, String correlationId);

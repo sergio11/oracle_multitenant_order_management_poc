@@ -5,7 +5,7 @@ import com.enterpriseorders.backend.execution.ExecutionContext;
 import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.order.application.IdempotentOperationExecutor;
 import com.enterpriseorders.backend.order.application.OrderService;
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.model.OrderBO;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextProvider;
@@ -58,9 +58,9 @@ class OrderServiceTest {
     void shouldCreateOrder() {
         when(orderRepository.create(TENANT_ID, 100L, "USD")).thenReturn(1L);
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(
-                new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of()));
+                new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of()));
 
-        OrderView result = orderService.createOrder(100L, "USD", null);
+        OrderBO result = orderService.createOrder(100L, "USD", null);
 
         assertEquals(1L, result.orderId());
         assertEquals("DRAFT", result.status());
@@ -71,7 +71,7 @@ class OrderServiceTest {
 
     @Test
     void shouldCreateOrderIdempotently() throws Exception {
-        OrderView draft = new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
+        OrderBO draft = new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
         String payload = objectMapper.writeValueAsString(draft);
         when(orderRepository.create(TENANT_ID, 100L, "USD")).thenReturn(1L);
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(draft);
@@ -82,8 +82,8 @@ class OrderServiceTest {
         when(idempotencyStore.insertPending(eq(TENANT_ID), eq("create-key"), eq("CREATE_ORDER"), eq(0L), anyString())).thenReturn(true);
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("create-key"), eq(1L), anyString())).thenReturn(1);
 
-        OrderView first = orderService.createOrder(100L, "USD", "create-key");
-        OrderView retry = orderService.createOrder(100L, "USD", "create-key");
+        OrderBO first = orderService.createOrder(100L, "USD", "create-key");
+        OrderBO retry = orderService.createOrder(100L, "USD", "create-key");
 
         assertEquals(1L, first.orderId());
         assertEquals(1L, retry.orderId());
@@ -96,7 +96,7 @@ class OrderServiceTest {
     void shouldRejectCreateWhenKeyReusedWithDifferentParams() throws Exception {
         // Same key, different customer/currency: the stored COMPLETED record
         // belongs to another order. Must 409, never silently return it.
-        OrderView firstOrder = new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
+        OrderBO firstOrder = new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
         String payload = objectMapper.writeValueAsString(firstOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "shared-key"))
                 .thenReturn(Optional.of(new IdempotencyStore.IdempotencyRecord(
@@ -113,9 +113,9 @@ class OrderServiceTest {
     @Test
     void shouldAddLineToOrder() {
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(
-                new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of()));
+                new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of()));
 
-        OrderView result = orderService.addLine(1L, 10L, 5L);
+        OrderBO result = orderService.addLine(1L, 10L, 5L);
 
         assertNotNull(result);
         verify(orderRepository).addLine(TENANT_ID, 1L, 10L, 5L);
@@ -124,9 +124,9 @@ class OrderServiceTest {
     @Test
     void shouldAddLineToPendingOrder() {
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(
-                new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", null, 1, List.of()));
+                new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", null, 1, List.of()));
 
-        OrderView result = orderService.addLine(1L, 10L, 5L);
+        OrderBO result = orderService.addLine(1L, 10L, 5L);
 
         assertNotNull(result);
         verify(orderRepository).addLine(TENANT_ID, 1L, 10L, 5L);
@@ -134,8 +134,8 @@ class OrderServiceTest {
 
     @Test
     void shouldReturnExistingOrderOnIdempotentRetry() throws Exception {
-        OrderView pendingOrder = new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
-        OrderView confirmedOrder = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
+        OrderBO pendingOrder = new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
+        OrderBO confirmedOrder = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
         String payload = objectMapper.writeValueAsString(confirmedOrder);
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(confirmedOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "test-key"))
@@ -145,10 +145,10 @@ class OrderServiceTest {
         when(idempotencyStore.insertPending(eq(TENANT_ID), eq("test-key"), eq("CONFIRM_ORDER"), eq(1L), anyString())).thenReturn(true);
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("test-key"), eq(1L), anyString())).thenReturn(1);
 
-        OrderView first = orderService.confirmOrder(1L, "test-key");
+        OrderBO first = orderService.confirmOrder(1L, "test-key");
         assertEquals("CONFIRMED", first.status());
 
-        OrderView retry = orderService.confirmOrder(1L, "test-key");
+        OrderBO retry = orderService.confirmOrder(1L, "test-key");
         assertEquals("CONFIRMED", retry.status());
 
         verify(orderRepository, times(1)).confirm(TENANT_ID, 1L, "APP_JAVA", null);
@@ -166,9 +166,9 @@ class OrderServiceTest {
     @Test
     void shouldGetOrder() {
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(
-                new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of()));
+                new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of()));
 
-        OrderView result = orderService.getOrder(1L);
+        OrderBO result = orderService.getOrder(1L);
 
         assertEquals(1L, result.orderId());
         verify(orderRepository).findById(TENANT_ID, 1L);
@@ -176,11 +176,11 @@ class OrderServiceTest {
 
     @Test
     void shouldCancelOrder() {
-        OrderView pendingOrder = new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
-        OrderView cancelledOrder = new OrderView(1L, "ORD-001", 100L, "CANCELLED", "USD", null, 0, List.of());
+        OrderBO pendingOrder = new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
+        OrderBO cancelledOrder = new OrderBO(1L, "ORD-001", 100L, "CANCELLED", "USD", null, 0, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(cancelledOrder);
 
-        OrderView result = orderService.cancelOrder(1L, "Customer request", null);
+        OrderBO result = orderService.cancelOrder(1L, "Customer request", null);
 
         assertEquals("CANCELLED", result.status());
         verify(orderRepository).cancel(TENANT_ID, 1L, "Customer request", "APP_JAVA", null);
@@ -189,8 +189,8 @@ class OrderServiceTest {
 
     @Test
     void shouldCancelOrderIdempotently() throws Exception {
-        OrderView pendingOrder = new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
-        OrderView cancelledOrder = new OrderView(1L, "ORD-001", 100L, "CANCELLED", "USD", null, 0, List.of());
+        OrderBO pendingOrder = new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
+        OrderBO cancelledOrder = new OrderBO(1L, "ORD-001", 100L, "CANCELLED", "USD", null, 0, List.of());
         String payload = objectMapper.writeValueAsString(cancelledOrder);
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(cancelledOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "cancel-key"))
@@ -200,8 +200,8 @@ class OrderServiceTest {
         when(idempotencyStore.insertPending(eq(TENANT_ID), eq("cancel-key"), eq("CANCEL_ORDER"), eq(1L), anyString())).thenReturn(true);
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("cancel-key"), eq(1L), anyString())).thenReturn(1);
 
-        OrderView first = orderService.cancelOrder(1L, "Customer request", "cancel-key");
-        OrderView retry = orderService.cancelOrder(1L, "Customer request", "cancel-key");
+        OrderBO first = orderService.cancelOrder(1L, "Customer request", "cancel-key");
+        OrderBO retry = orderService.cancelOrder(1L, "Customer request", "cancel-key");
 
         assertEquals("CANCELLED", first.status());
         assertEquals("CANCELLED", retry.status());
@@ -229,14 +229,14 @@ class OrderServiceTest {
 
     @Test
     void shouldConfirmOrderAndMarkIdempotency() {
-        OrderView pendingOrder = new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
-        OrderView confirmedOrder = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
+        OrderBO pendingOrder = new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
+        OrderBO confirmedOrder = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(confirmedOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "idem-123")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(eq(TENANT_ID), eq("idem-123"), eq("CONFIRM_ORDER"), eq(1L), anyString())).thenReturn(true);
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("idem-123"), eq(1L), anyString())).thenReturn(1);
 
-        OrderView result = orderService.confirmOrder(1L, "idem-123");
+        OrderBO result = orderService.confirmOrder(1L, "idem-123");
 
         assertEquals("CONFIRMED", result.status());
         verify(idempotencyStore).markCompleted(eq(TENANT_ID), eq("idem-123"), eq(1L), anyString());
@@ -244,11 +244,11 @@ class OrderServiceTest {
 
     @Test
     void shouldSkipIdempotencyWhenKeyIsNull() {
-        OrderView pendingOrder = new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
-        OrderView confirmedOrder = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
+        OrderBO pendingOrder = new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", null, 0, List.of());
+        OrderBO confirmedOrder = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(pendingOrder).thenReturn(confirmedOrder);
 
-        OrderView result = orderService.confirmOrder(1L, null);
+        OrderBO result = orderService.confirmOrder(1L, null);
 
         assertEquals("CONFIRMED", result.status());
         verify(idempotencyStore, never()).markCompleted(anyLong(), anyString(), eq(1L), anyString());
@@ -257,7 +257,7 @@ class OrderServiceTest {
 
     @Test
     void shouldRejectAddLineWhenNotDraftOrPending() {
-        OrderView confirmedOrder = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
+        OrderBO confirmedOrder = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(confirmedOrder);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -268,7 +268,7 @@ class OrderServiceTest {
 
     @Test
     void shouldRejectConfirmWhenNotPending() {
-        OrderView confirmedOrder = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
+        OrderBO confirmedOrder = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(confirmedOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "key-123")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(eq(TENANT_ID), eq("key-123"), eq("CONFIRM_ORDER"), eq(1L), anyString())).thenReturn(true);
@@ -282,7 +282,7 @@ class OrderServiceTest {
 
     @Test
     void shouldRejectCancelWhenShipped() {
-        OrderView shippedOrder = new OrderView(1L, "ORD-001", 100L, "SHIPPED", "USD", null, 1, List.of());
+        OrderBO shippedOrder = new OrderBO(1L, "ORD-001", 100L, "SHIPPED", "USD", null, 1, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(shippedOrder);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -295,7 +295,7 @@ class OrderServiceTest {
 
     @Test
     void shouldRejectCancelWhenCompleted() {
-        OrderView completedOrder = new OrderView(1L, "ORD-001", 100L, "COMPLETED", "USD", null, 0, List.of());
+        OrderBO completedOrder = new OrderBO(1L, "ORD-001", 100L, "COMPLETED", "USD", null, 0, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(completedOrder);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -305,7 +305,7 @@ class OrderServiceTest {
 
     @Test
     void shouldRejectCancelWhenAlreadyCancelled() {
-        OrderView cancelledOrder = new OrderView(1L, "ORD-001", 100L, "CANCELLED", "USD", null, 0, List.of());
+        OrderBO cancelledOrder = new OrderBO(1L, "ORD-001", 100L, "CANCELLED", "USD", null, 0, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(cancelledOrder);
 
         BusinessException ex = assertThrows(BusinessException.class,
@@ -315,7 +315,7 @@ class OrderServiceTest {
 
     @Test
     void shouldRejectPaymentWhenDraft() {
-        OrderView draftOrder = new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
+        OrderBO draftOrder = new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", null, 0, List.of());
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(draftOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "key-1")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(eq(TENANT_ID), eq("key-1"), eq("PAYMENT"), eq(1L), anyString())).thenReturn(true);
@@ -329,8 +329,8 @@ class OrderServiceTest {
 
     @Test
     void shouldRegisterPaymentIdempotently() throws Exception {
-        OrderView confirmedOrder = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
-        OrderView paidOrder = new OrderView(1L, "ORD-001", 100L, "PAID", "USD", null, 1, List.of());
+        OrderBO confirmedOrder = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", null, 1, List.of());
+        OrderBO paidOrder = new OrderBO(1L, "ORD-001", 100L, "PAID", "USD", null, 1, List.of());
         String payload = objectMapper.writeValueAsString(paidOrder);
         when(orderRepository.findById(TENANT_ID, 1L)).thenReturn(confirmedOrder).thenReturn(paidOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "pay-key")).thenReturn(Optional.empty());
@@ -338,7 +338,7 @@ class OrderServiceTest {
                 .thenReturn(true);
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("pay-key"), eq(1L), anyString())).thenReturn(1);
 
-        OrderView first = orderService.registerPayment(1L, "PAY-001", new java.math.BigDecimal("50.00"),
+        OrderBO first = orderService.registerPayment(1L, "PAY-001", new java.math.BigDecimal("50.00"),
                 "USD", "CARD", "pay-key");
 
         // The retry must replay because it carries the same request
@@ -350,7 +350,7 @@ class OrderServiceTest {
                 new IdempotencyStore.IdempotencyRecord(1L, "PAYMENT", "COMPLETED", payload,
                         fpCaptor.getValue())));
 
-        OrderView retry = orderService.registerPayment(1L, "PAY-001", new java.math.BigDecimal("50.00"),
+        OrderBO retry = orderService.registerPayment(1L, "PAY-001", new java.math.BigDecimal("50.00"),
                 "USD", "CARD", "pay-key");
 
         assertEquals("PAID", first.status());
@@ -365,7 +365,7 @@ class OrderServiceTest {
         // Same key, same operation, same order, but a DIFFERENT request
         // (closure fix C4): must 409, never silently replay the first
         // payment's response as if the second one had been executed.
-        OrderView paidOrder = new OrderView(1L, "ORD-001", 100L, "PAID", "USD", null, 1, List.of());
+        OrderBO paidOrder = new OrderBO(1L, "ORD-001", 100L, "PAID", "USD", null, 1, List.of());
         String payload = objectMapper.writeValueAsString(paidOrder);
         when(idempotencyStore.findByKey(TENANT_ID, "pay-shared")).thenReturn(Optional.of(
                 new IdempotencyStore.IdempotencyRecord(1L, "PAYMENT", "COMPLETED", payload,

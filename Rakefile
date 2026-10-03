@@ -579,7 +579,7 @@ namespace :qa do
       puts 'Flyway repair OK.'
     end
 
-    desc 'Run Flyway migrations (V001-V025) against Oracle NodePort :1521'
+    desc 'Run Flyway migrations (V001-V026) against Oracle NodePort :1521'
     task :migrate do
       ensure_cluster!
       puts 'Waiting for Oracle before migrate...'

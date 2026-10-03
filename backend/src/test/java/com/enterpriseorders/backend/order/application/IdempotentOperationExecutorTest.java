@@ -2,7 +2,7 @@ package com.enterpriseorders.backend.order.application;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.model.OrderBO;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,19 +36,19 @@ class IdempotentOperationExecutorTest {
     private static final Long ORDER_ID = 100L;
     /** Request fingerprint the caller computed for the request under test. */
     private static final String FP = "fp-request-1";
-    private OrderView mockResponse;
+    private OrderBO mockResponse;
 
     @BeforeEach
     void setUp() {
         executor = new IdempotentOperationExecutor(idempotencyStore, orderRepository, objectMapper);
-        mockResponse = new OrderView(ORDER_ID, "ORD-001", 1L, "CONFIRMED", "USD", null, 0, List.of());
+        mockResponse = new OrderBO(ORDER_ID, "ORD-001", 1L, "CONFIRMED", "USD", null, 0, List.of());
     }
 
     @Test
     void shouldExecuteActionWhenNoIdempotencyKey() {
-        Supplier<OrderView> action = () -> mockResponse;
+        Supplier<OrderBO> action = () -> mockResponse;
 
-        OrderView result = executor.execute(TENANT_ID, null, "CONFIRM_ORDER", ORDER_ID, null, action);
+        OrderBO result = executor.execute(TENANT_ID, null, "CONFIRM_ORDER", ORDER_ID, null, action);
 
         assertEquals(ORDER_ID, result.orderId());
         verifyNoInteractions(idempotencyStore);
@@ -59,7 +59,7 @@ class IdempotentOperationExecutorTest {
         // Closure fix (C5): a present-but-blank key is malformed, not
         // "no idempotency requested" - it used to silently run the action
         // without any idempotency guarantee.
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "  ", "CONFIRM_ORDER", ORDER_ID, FP, action));
@@ -72,7 +72,7 @@ class IdempotentOperationExecutorTest {
 
     @Test
     void shouldRejectKeyLongerThan100Characters() {
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
 
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "k".repeat(101), "CONFIRM_ORDER", ORDER_ID, FP, action));
@@ -89,8 +89,8 @@ class IdempotentOperationExecutorTest {
         var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "COMPLETED", payload, FP);
         when(idempotencyStore.findByKey(TENANT_ID, "key-123")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
-        OrderView result = executor.execute(TENANT_ID, "key-123", "CONFIRM_ORDER", ORDER_ID, FP, action);
+        Supplier<OrderBO> action = mock(Supplier.class);
+        OrderBO result = executor.execute(TENANT_ID, "key-123", "CONFIRM_ORDER", ORDER_ID, FP, action);
 
         assertEquals(ORDER_ID, result.orderId());
         assertEquals("CONFIRMED", result.status());
@@ -107,8 +107,8 @@ class IdempotentOperationExecutorTest {
         var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "COMPLETED", payload, null);
         when(idempotencyStore.findByKey(TENANT_ID, "key-pre-v024")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
-        OrderView result = executor.execute(TENANT_ID, "key-pre-v024", "CONFIRM_ORDER", ORDER_ID, FP, action);
+        Supplier<OrderBO> action = mock(Supplier.class);
+        OrderBO result = executor.execute(TENANT_ID, "key-pre-v024", "CONFIRM_ORDER", ORDER_ID, FP, action);
 
         assertEquals(ORDER_ID, result.orderId());
         verify(action, never()).get();
@@ -120,8 +120,8 @@ class IdempotentOperationExecutorTest {
         when(idempotencyStore.findByKey(TENANT_ID, "key-legacy")).thenReturn(Optional.of(record));
         when(orderRepository.findById(TENANT_ID, ORDER_ID)).thenReturn(mockResponse);
 
-        Supplier<OrderView> action = mock(Supplier.class);
-        OrderView result = executor.execute(TENANT_ID, "key-legacy", "CONFIRM_ORDER", ORDER_ID, FP, action);
+        Supplier<OrderBO> action = mock(Supplier.class);
+        OrderBO result = executor.execute(TENANT_ID, "key-legacy", "CONFIRM_ORDER", ORDER_ID, FP, action);
 
         assertEquals(ORDER_ID, result.orderId());
         verify(orderRepository).findById(TENANT_ID, ORDER_ID);
@@ -133,7 +133,7 @@ class IdempotentOperationExecutorTest {
         var record = new IdempotencyStore.IdempotencyRecord(0L, "CREATE_ORDER", "COMPLETED", null, null);
         when(idempotencyStore.findByKey(TENANT_ID, "key-create-legacy")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "key-create-legacy", "CREATE_ORDER", 0L, FP, action));
 
@@ -148,7 +148,7 @@ class IdempotentOperationExecutorTest {
         var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "PENDING", null, FP);
         when(idempotencyStore.findByKey(TENANT_ID, "key-pending")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "key-pending", "CONFIRM_ORDER", ORDER_ID, FP, action));
 
@@ -167,7 +167,7 @@ class IdempotentOperationExecutorTest {
                 "fp-of-a-different-request");
         when(idempotencyStore.findByKey(TENANT_ID, "key-pay-reuse")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "key-pay-reuse", "PAYMENT", ORDER_ID, FP, action));
 
@@ -185,7 +185,7 @@ class IdempotentOperationExecutorTest {
                 "fp-of-a-different-request");
         when(idempotencyStore.findByKey(TENANT_ID, "key-pay-pending")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "key-pay-pending", "PAYMENT", ORDER_ID, FP, action));
 
@@ -200,7 +200,7 @@ class IdempotentOperationExecutorTest {
         when(idempotencyStore.findByKey(TENANT_ID, "key-failed")).thenReturn(Optional.of(record));
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-failed"), eq(ORDER_ID), anyString())).thenReturn(1);
 
-        OrderView result = executor.execute(TENANT_ID, "key-failed", "CONFIRM_ORDER", ORDER_ID, FP,
+        OrderBO result = executor.execute(TENANT_ID, "key-failed", "CONFIRM_ORDER", ORDER_ID, FP,
                 () -> mockResponse);
 
         assertEquals(ORDER_ID, result.orderId());
@@ -214,7 +214,7 @@ class IdempotentOperationExecutorTest {
         when(idempotencyStore.insertPending(TENANT_ID, "key-456", "CONFIRM_ORDER", ORDER_ID, FP)).thenReturn(true);
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-456"), eq(ORDER_ID), anyString())).thenReturn(1);
 
-        OrderView result = executor.execute(TENANT_ID, "key-456", "CONFIRM_ORDER", ORDER_ID, FP,
+        OrderBO result = executor.execute(TENANT_ID, "key-456", "CONFIRM_ORDER", ORDER_ID, FP,
                 () -> mockResponse);
 
         assertEquals(ORDER_ID, result.orderId());
@@ -238,7 +238,7 @@ class IdempotentOperationExecutorTest {
         when(idempotencyStore.findByKey(TENANT_ID, "key-race")).thenReturn(Optional.empty());
         when(idempotencyStore.insertPending(TENANT_ID, "key-race", "CONFIRM_ORDER", ORDER_ID, FP)).thenReturn(false);
 
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "key-race", "CONFIRM_ORDER", ORDER_ID, FP, action));
 
@@ -257,8 +257,8 @@ class IdempotentOperationExecutorTest {
                 .thenReturn(Optional.of(raceRecord));
         when(idempotencyStore.insertPending(TENANT_ID, "key-race2", "CONFIRM_ORDER", ORDER_ID, FP)).thenReturn(false);
 
-        Supplier<OrderView> action = mock(Supplier.class);
-        OrderView result = executor.execute(TENANT_ID, "key-race2", "CONFIRM_ORDER", ORDER_ID, FP, action);
+        Supplier<OrderBO> action = mock(Supplier.class);
+        OrderBO result = executor.execute(TENANT_ID, "key-race2", "CONFIRM_ORDER", ORDER_ID, FP, action);
 
         assertEquals(ORDER_ID, result.orderId());
         verify(action, never()).get();
@@ -276,7 +276,7 @@ class IdempotentOperationExecutorTest {
                 .thenReturn(Optional.of(raceRecord));
         when(idempotencyStore.insertPending(TENANT_ID, "key-race-fp", "PAYMENT", ORDER_ID, FP)).thenReturn(false);
 
-        Supplier<OrderView> action = mock(Supplier.class);
+        Supplier<OrderBO> action = mock(Supplier.class);
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> executor.execute(TENANT_ID, "key-race-fp", "PAYMENT", ORDER_ID, FP, action));
 
@@ -352,8 +352,8 @@ class IdempotentOperationExecutorTest {
         var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CREATE_ORDER", "COMPLETED", payload, FP);
         when(idempotencyStore.findByKey(TENANT_ID, "key-create-retry")).thenReturn(Optional.of(record));
 
-        Supplier<OrderView> action = mock(Supplier.class);
-        OrderView result = executor.execute(TENANT_ID, "key-create-retry", "CREATE_ORDER", 0L, FP, action);
+        Supplier<OrderBO> action = mock(Supplier.class);
+        OrderBO result = executor.execute(TENANT_ID, "key-create-retry", "CREATE_ORDER", 0L, FP, action);
 
         assertEquals(ORDER_ID, result.orderId());
         verify(action, never()).get();
@@ -366,7 +366,7 @@ class IdempotentOperationExecutorTest {
         when(idempotencyStore.markCompleted(eq(TENANT_ID), eq("key-create-new"), eq(ORDER_ID), anyString()))
                 .thenReturn(1);
 
-        OrderView result = executor.execute(TENANT_ID, "key-create-new", "CREATE_ORDER", 0L, FP,
+        OrderBO result = executor.execute(TENANT_ID, "key-create-new", "CREATE_ORDER", 0L, FP,
                 () -> mockResponse);
 
         assertEquals(ORDER_ID, result.orderId());

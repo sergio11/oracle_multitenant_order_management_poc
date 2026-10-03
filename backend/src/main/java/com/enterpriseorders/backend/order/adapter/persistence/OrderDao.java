@@ -3,8 +3,8 @@ package com.enterpriseorders.backend.order.adapter.persistence;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.DatabaseException;
 import com.enterpriseorders.backend.exception.PlsqlErrorMapper;
-import com.enterpriseorders.backend.order.model.OrderView;
-import com.enterpriseorders.backend.order.model.OrderView.OrderLineView;
+import com.enterpriseorders.backend.order.model.OrderBO;
+import com.enterpriseorders.backend.order.model.OrderBO.OrderLineBO;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -14,10 +14,14 @@ import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * JDBC repository for ORDER operations.
+ *
+ * Reads go through the V_ORDER_DETAIL view (V026): header + lines come
+ * back in ONE round trip and are grouped in Java.
  *
  * All order lifecycle mutations delegate to the PL/SQL packages
  * (SRS §32, §33, §37). This keeps the atomic transaction boundary on
@@ -33,39 +37,43 @@ public class OrderDao implements OrderRepository {
     }
 
     @Override
-    public OrderView findById(Long tenantId, Long orderId) {
-        OrderView order = jdbcTemplate.query(
+    public OrderBO findById(Long tenantId, Long orderId) {
+        return jdbcTemplate.query(
                 "SELECT order_id, order_number, customer_id, status, " +
-                "       currency, total_amount, version " +
-                "FROM sales_order WHERE order_id = ? AND tenant_id = ?",
+                "       currency, total_amount, version, " +
+                "       order_line_id, product_id, quantity, unit_price, line_total " +
+                "FROM v_order_detail " +
+                "WHERE order_id = ? AND tenant_id = ? " +
+                "ORDER BY order_line_id",
                 rs -> {
                     if (!rs.next()) {
                         throw new BusinessException("ORDER_NOT_FOUND",
                                 "Order not found: " + orderId);
                     }
-                    return new OrderView(
-                            rs.getLong("order_id"),
-                            rs.getString("order_number"),
-                            rs.getLong("customer_id"),
-                            rs.getString("status"),
-                            rs.getString("currency"),
-                            rs.getBigDecimal("total_amount"),
-                            rs.getInt("version"),
-                            List.of());
+                    // First row carries the header (LEFT JOIN keeps lines
+                    // nullable so a header-only order still reaches here).
+                    Long headerOrderId = rs.getLong("order_id");
+                    String orderNumber = rs.getString("order_number");
+                    Long customerId = rs.getLong("customer_id");
+                    String status = rs.getString("status");
+                    String currency = rs.getString("currency");
+                    BigDecimal totalAmount = rs.getBigDecimal("total_amount");
+                    int version = rs.getInt("version");
+                    List<OrderLineBO> lines = new ArrayList<>();
+                    do {
+                        rs.getLong("order_line_id");
+                        if (!rs.wasNull()) {
+                            lines.add(new OrderLineBO(
+                                    rs.getLong("product_id"),
+                                    rs.getLong("quantity"),
+                                    rs.getBigDecimal("unit_price"),
+                                    rs.getBigDecimal("line_total")));
+                        }
+                    } while (rs.next());
+                    return new OrderBO(headerOrderId, orderNumber, customerId, status,
+                            currency, totalAmount, version, lines);
                 },
                 orderId, tenantId);
-        List<OrderLineView> lines = jdbcTemplate.query(
-                "SELECT product_id, quantity, unit_price, line_total " +
-                "FROM sales_order_line WHERE order_id = ? AND tenant_id = ? " +
-                "ORDER BY order_line_id",
-                (rs, rowNum) -> new OrderLineView(
-                        rs.getLong("product_id"),
-                        rs.getLong("quantity"),
-                        rs.getBigDecimal("unit_price"),
-                        rs.getBigDecimal("line_total")),
-                orderId, tenantId);
-        return new OrderView(order.orderId(), order.orderNumber(), order.customerId(),
-                order.status(), order.currency(), order.totalAmount(), order.version(), lines);
     }
 
     @Override

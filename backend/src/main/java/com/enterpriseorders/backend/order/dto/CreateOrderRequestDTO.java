@@ -4,11 +4,11 @@ import com.enterpriseorders.backend.common.domain.Currency;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
-public record CreateOrderRequest(
+public record CreateOrderRequestDTO(
         @NotNull Long customerId,
         @NotBlank String currency
 ) {
-    public CreateOrderRequest {
+    public CreateOrderRequestDTO {
         Currency.of(currency);
     }
 }

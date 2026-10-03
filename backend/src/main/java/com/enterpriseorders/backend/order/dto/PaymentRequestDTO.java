@@ -9,13 +9,13 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 
-public record PaymentRequest(
+public record PaymentRequestDTO(
         @NotBlank @Size(max = 100) String paymentReference,
         @NotNull @DecimalMin("0.01") BigDecimal amount,
         @NotBlank @Pattern(regexp = "^[A-Z]{3}$") String currency,
         @NotBlank @Pattern(regexp = "CARD|BANK_TRANSFER|WALLET|CASH") String paymentMethod
 ) {
-    public PaymentRequest {
+    public PaymentRequestDTO {
         Currency.of(currency);
     }
 }

@@ -144,7 +144,7 @@ Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inven
 |---|---|
 | 🔐 **Database-level multi-tenancy** | VPD/DBMS_RLS on 16 objects — invisible, fail-closed isolation. No application code can leak cross-tenant data. |
 | ⚡ **Atomic business logic** | PL/SQL `confirm_order` procedure: validates + locks + reserves + transitions + audits + outbox in one transaction. Java domain deleted — PL/SQL is the single authority. |
-| 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (15 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral model types (`OrderView`, `TenantView`); controllers map to DTOs (wire JSON unchanged). Error-code→HTTP mapping is centralized in `GlobalExceptionHandler` (the tenant filter serializes its own path errors through `statusFor`). |
+| 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (15 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral business models (`OrderBO`, `TenantBO`); controllers map them to DTOs with MapStruct (wire JSON unchanged). Error-code→HTTP mapping is centralized in `GlobalExceptionHandler` (the tenant filter serializes its own path errors through `statusFor`). |
 | 🔄 **Idempotent operations** | Create/confirm/cancel/payment accept `Idempotency-Key`; a replayed key returns the stored response (payloads ≤ 4000 chars — larger ones fall back to a current-state re-read); a concurrent duplicate blocks on the unique key until the winner commits, then replays (the in-flight `PENDING` row is never visible outside its transaction). |
 | 📦 **Transactional outbox** | Outbox events written atomically by PL/SQL within the same transaction as business mutations. Publisher/relayer is out of POC scope (see Known Limitations). |
 | 🛡️ **Pessimistic locking** | `SELECT FOR UPDATE` on inventory prevents overselling. Concurrency test proves exactly-1-of-N success with stock=1. |
@@ -300,8 +300,8 @@ sequenceDiagram
     DB-->>DS: Connection with VPD active
     DA->>DB: SQL Query (auto-filtered by VPD)
     DB-->>DA: Tenant-isolated results
-    DA-->>SV: OrderView (model type)
-    SV-->>CO: OrderView → OrderResponse DTO at the edge
+    DA-->>SV: OrderBO (model type)
+    SV-->>CO: OrderBO → OrderResponseDTO (MapStruct) at the edge
     CO-->>C: HTTP Response + X-Correlation-ID
 ```
 
@@ -364,7 +364,7 @@ Pessimistic locking prevents overselling:
 
 Critical operations are idempotent via `idempotency_key` table:
 
-- 📨 `create`, `confirm`, `cancel` and `register_payment` accept `Idempotency-Key` header (create returns `201` + `Location`); `OrderResponse` carries `lines` and no `tenantId`; cancel rejects `SHIPPED` (409) and blank reason (400)
+- 📨 `create`, `confirm`, `cancel` and `register_payment` accept `Idempotency-Key` header (create returns `201` + `Location`); `OrderResponseDTO` carries `lines` and no `tenantId`; cancel rejects `SHIPPED` (409) and blank reason (400)
 - 📝 First execution: insert PENDING → execute → mark COMPLETED (**all in one transaction** — the `PENDING` row is never observable by other sessions, and the whole lifecycle assumes the caller opened that transaction, see Known Limitations); the status check happens **inside** the idempotent action
 - 🔁 Retry with the same key returns the stored result without re-execution (payload ≤ 4000 chars; larger payloads are not stored and fall back to a current-state re-read)
 - 🔒 Key is bound to **operation + aggregateId** — misuse returns `409 IDEMPOTENCY_KEY_CONFLICT`; unique constraint per tenant means a concurrent duplicate waits on the index (no fast 409 for in-flight keys), then replays or conflicts
@@ -441,7 +441,7 @@ cd backend
 mvn clean test
 ```
 
-> ✅ **255 tests in 22 test classes — 0 failures.** (incl. ArchUnit hexagonal rules, SecurityMatrixTest, CredentialHardeningCheckTest, OrderDaoTest, IdempotencyDaoTest, PaymentMethodConsistencyTest)
+> ✅ **260 tests in 23 test classes — 0 failures.** (incl. ArchUnit hexagonal rules, SecurityMatrixTest, CredentialHardeningCheckTest, OrderDaoTest, IdempotencyDaoTest, PaymentMethodConsistencyTest, RequestFingerprintTest)
 
 ### 📋 Test Types
 
@@ -491,8 +491,8 @@ poc_oracle/
 │   └── 📂 src/
 │       ├── 📂 main/java/.../
 │       │   ├── ⚙️ config/                  # OracleUcpConfig, TenantAwareDataSource, SecurityConfig, FilterOrderConfig, CredentialHardeningCheck
-│       │   ├── 🔍 tenant/                  # adapter/web|persistence|security, application, port/input|output, dto, model (TenantView/NewTenant)
-│       │   ├── 📋 order/                   # adapter/web|persistence, application (incl. IdempotentOperationExecutor), port/input|output, dto, model (OrderView)
+│       │   ├── 🔍 tenant/                  # adapter/web(+mapper)|persistence|security, application, port/input|output, dto, model (TenantBO/NewTenantBO)
+│       │   ├── 📋 order/                   # adapter/web(+mapper)|persistence, application (incl. IdempotentOperationExecutor), port/input|output, dto, model (OrderBO)
 │       │   │   └── 📤 port/                # Input (use cases) / Output (repositories)
 │       │   ├── 📊 reporting/               # adapter/web|persistence, application, port/input|output(+dto), ratelimiter/
 │       │   ├── 💎 common/domain/           # OrderStatus, Currency, PaymentMethod (literals + consistency test; Money/Quantity deleted)
@@ -503,11 +503,12 @@ poc_oracle/
 │       ├── 📂 main/resources/
 │       │   ├── 📄 application.yml          # Main config (spring.flyway.enabled=false; local profile)
 │       │   └── 📄 application-prod.yml     # Production profile (requires env passwords, no defaults)
-│       └── 📂 test/java/.../               # 22 test classes / 255 tests (JaCoCo report under target/site/jacoco)
+│       └── 📂 test/java/.../               # 23 test classes / 260 tests (JaCoCo report under target/site/jacoco)
 ├── 🗄️ database/
-│   ├── 📂 migrations/                      # 25 Flyway-versioned SQL files (V001-V025)
+│   ├── 📂 migrations/                      # 26 Flyway-versioned SQL files (V001-V026)
 │   │                                        #   V019 reporting/runtime revoke · V020 reserved_warehouse_id · V021 outbox dedup · V022 payload 4000
 │   │                                        #   V023 runtime privilege fixes · V024 idempotency fingerprint · V025 VPD policy compensation
+│   │                                        #   V026 v_order_detail (single round-trip order read)
 │   ├── 📂 packages/                        # PL/SQL package specs (pks_*) + bodies (pkb_*) + deploy script
 │   ├── 📂 backup/                          # RMAN scripts (rman_full_backup.rcv, rman_restore.bat, backup_verify.sql) — unexecuted live
 │   ├── 🔒 security/                        # VPD predicate function + policy application + verify_vpd_policies.sql (16 policies)
@@ -559,7 +560,7 @@ podman compose up -d
 cd ../../backend
 mvn flyway:migrate "-Dflyway.password=<APP_OWNER password>"
 # Defaults: flyway.user=APP_OWNER, flyway.url=jdbc:oracle:thin:@localhost:1521/pdb_oltp,
-# migrations from filesystem:../database/migrations (V001-V025).
+# migrations from filesystem:../database/migrations (V001-V026).
 # NOTE: spring.flyway is disabled at runtime — Maven/rake own migrations.
 ```
 
@@ -637,7 +638,7 @@ rake qa:cluster:create   # kind cluster 'poc-qa' (Podman provider)
 rake qa:image:build      # backend image via Podman (multi-stage Dockerfile)
 rake qa:image:load       # load image into the kind node (via tarball)
 rake qa:deploy           # namespace + secrets + Oracle StatefulSet + backend
-rake qa:db:init          # flyway migrate (V001–V025) + PL/SQL packages + seed
+rake qa:db:init          # flyway migrate (V001–V026) + PL/SQL packages + seed
 rake qa:wait             # until Oracle + backend rollout are Ready
 rake qa:smoke            # 8 API checks: health, auth, order, idempotency-409, refresh, isolation, tenants (RBAC + FR-001), metrics
 rake qa:db:verify        # DB verification: 16 VPD policies + tenant isolation + order-to-payment suites
@@ -666,7 +667,7 @@ rake qa:wait && rake qa:smoke   # recovery check
 
 | Check | Result |
 |---|---|
-| `mvn clean test` | 255/255 green in 22 classes (JaCoCo report, no gate by design; incl. ArchUnit, SecurityMatrix, CredentialHardening, DAO tests) |
+| `mvn clean test` | 260/260 green in 23 classes (JaCoCo report, no gate by design; incl. ArchUnit, SecurityMatrix, CredentialHardening, DAO tests) |
 | `rake qa:smoke` | 8/8 PASS (health, 401, create, idempotency 409, refresh, isolation, tenants RBAC + FR-001 positive path, metrics) |
 | `rake qa:db:verify` | verify-vpd (16/16) + T_security isolation + IT order-to-payment PASSED (IT owner-cleanup leaves no residue) |
 | `IT_order_to_payment.sql` | PASSED (confirm → payment → MV → audit → outbox asserts, CONFIRMED/PAID asserts + cleanup) |
@@ -679,7 +680,7 @@ rake qa:wait && rake qa:smoke   # recovery check
 
 | What | Who | Notes |
 |---|---|---|
-| Owns schema objects, runs Flyway DDL | `APP_OWNER` | migrations V001–V025, packages (definer's rights) |
+| Owns schema objects, runs Flyway DDL | `APP_OWNER` | migrations V001–V026, packages (definer's rights) |
 | Runs the application | `APP_RUNTIME` | least privilege: SELECT + idempotency DML + EXECUTE on `pkg_tenant`/`pkg_audit`/`pkg_order_management` only (V023 also revoked `pkg_inventory`); never `EXEMPT ACCESS POLICY`; no direct audit/history/outbox DML (V019) |
 | Reporting workload | `APP_REPORTING` | SELECT on tables/MVs + refresh proc only (V019 revoked mutating packages; V023 also revoked `pkg_tenant`/`pkg_vpd`) |
 | Bootstraps users, `EXEMPT ACCESS POLICY` → `APP_OWNER` | `SYS` | `infrastructure/podman/scripts/01-init-db.sql` (first boot only) |
@@ -755,7 +756,7 @@ rake qa:wait && rake qa:smoke   # recovery check
 
 Honest boundaries of this POC:
 
-- 🚫 **No CI pipeline in the repo** — run `mvn clean test` locally (255 tests, no DB needed: DAO tests mock JDBC). DB integration (VPD verify, tenant isolation, order-to-payment) runs in the lab via `rake qa:db:verify`.
+- 🚫 **No CI pipeline in the repo** — run `mvn clean test` locally (260 tests, no DB needed: DAO tests mock JDBC). DB integration (VPD verify, tenant isolation, order-to-payment) runs in the lab via `rake qa:db:verify`.
 - 📦 **Outbox publisher not implemented** — no component polls `outbox_event` or marks events `PUBLISHED`; events stay `NEW`
 - 🌐 **Customer / Product / Inventory REST endpoints not implemented** (FR-004/005/006) — the API covers orders, tenants, and reports
 - 🔓 **Tenant activate/suspend (FR-002/FR-003) has no REST endpoint** — the procedures exist in `pkg_tenant` but nothing calls them; likewise AC-002 (create customer/product via API) is seed-only. The API implements FR-001 (provisioning) and the order-lifecycle FRs.

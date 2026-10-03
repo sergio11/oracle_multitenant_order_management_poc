@@ -1,7 +1,8 @@
 package com.enterpriseorders.backend.tenant;
 
 import com.enterpriseorders.backend.tenant.adapter.web.TenantController;
-import com.enterpriseorders.backend.tenant.model.TenantView;
+import com.enterpriseorders.backend.tenant.adapter.web.mapper.TenantMapperImpl;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.mockito.Mockito.*;
@@ -20,6 +22,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(TenantController.class)
+@Import(TenantMapperImpl.class)
 @AutoConfigureMockMvc(addFilters = false)
 class TenantControllerTest {
     @Autowired private MockMvc mockMvc;
@@ -31,7 +34,7 @@ class TenantControllerTest {
     @MockBean private RoleTenancy roleTenancy;
 
     private static final String BASE = "/api/v1/tenants";
-    private final TenantView mockTenant = new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA");
+    private final TenantBO mockTenant = new TenantBO(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA");
 
     @Test
     void shouldCreateTenant() throws Exception {
@@ -52,7 +55,7 @@ class TenantControllerTest {
     }
 
     @Test
-    void shouldReturn400WhenInvalidTenantRequest() throws Exception {
+    void shouldReturn400WhenInvalidTenantRequestDTO() throws Exception {
         mockMvc.perform(post(BASE)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"name\":\"Acme Corp\",\"tier\":\"STANDARD\"}"))

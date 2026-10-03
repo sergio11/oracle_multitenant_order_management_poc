@@ -3,7 +3,7 @@ package com.enterpriseorders.backend.order.adapter.persistence;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.DatabaseException;
 import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.model.OrderBO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -14,7 +14,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.ResultSetExtractor;
-import org.springframework.jdbc.core.RowMapper;
 
 import java.math.BigDecimal;
 import java.sql.CallableStatement;
@@ -34,41 +33,80 @@ class OrderDaoTest {
     @InjectMocks
     private OrderDao orderDao;
 
+    /**
+     * Feeds the single V_ORDER_DETAIL result set consumed by findById:
+     * row 0 always carries the header; row r additionally carries line r
+     * (LEFT JOIN: the header row has null line columns when the order has
+     * no lines).
+     */
     @SuppressWarnings("unchecked")
-    private void stubFindHeader(boolean found) {
+    private void stubFindById(boolean found, OrderBO.OrderLineBO... lines) {
         when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq(1L), eq(9L)))
                 .thenAnswer(inv -> {
-                    ResultSetExtractor<OrderView> extractor = inv.getArgument(1);
+                    ResultSetExtractor<OrderBO> extractor = inv.getArgument(1);
                     var rs = mock(java.sql.ResultSet.class);
-                    when(rs.next()).thenReturn(found);
+                    int rowCount = found ? Math.max(1, lines.length) : 0;
+                    var idx = new java.util.concurrent.atomic.AtomicInteger(-1);
+                    boolean[] wasNull = {false};
+                    when(rs.next()).thenAnswer(i -> idx.incrementAndGet() < rowCount);
                     if (found) {
-                        when(rs.getLong("order_id")).thenReturn(1L);
-                        when(rs.getString("order_number")).thenReturn("ORD-001");
-                        when(rs.getLong("customer_id")).thenReturn(100L);
-                        when(rs.getString("status")).thenReturn("DRAFT");
-                        when(rs.getString("currency")).thenReturn("USD");
-                        when(rs.getBigDecimal("total_amount")).thenReturn(new BigDecimal("250.00"));
-                        when(rs.getInt("version")).thenReturn(0);
+                        lenient().when(rs.getLong("order_id"))
+                                .thenAnswer(i -> { wasNull[0] = false; return 1L; });
+                        lenient().when(rs.getString("order_number"))
+                                .thenAnswer(i -> { wasNull[0] = false; return "ORD-001"; });
+                        lenient().when(rs.getLong("customer_id"))
+                                .thenAnswer(i -> { wasNull[0] = false; return 100L; });
+                        lenient().when(rs.getString("status"))
+                                .thenAnswer(i -> { wasNull[0] = false; return "DRAFT"; });
+                        lenient().when(rs.getString("currency"))
+                                .thenAnswer(i -> { wasNull[0] = false; return "USD"; });
+                        lenient().when(rs.getBigDecimal("total_amount"))
+                                .thenAnswer(i -> { wasNull[0] = false; return new BigDecimal("250.00"); });
+                        lenient().when(rs.getInt("version"))
+                                .thenAnswer(i -> { wasNull[0] = false; return 0; });
+                        lenient().when(rs.getLong("order_line_id")).thenAnswer(i -> {
+                            if (idx.get() < 0 || idx.get() >= lines.length) {
+                                wasNull[0] = true;
+                                return 0L;
+                            }
+                            wasNull[0] = false;
+                            return (long) (idx.get() + 1);
+                        });
+                        lenient().when(rs.getLong("product_id")).thenAnswer(i -> {
+                            if (idx.get() < 0 || idx.get() >= lines.length) {
+                                wasNull[0] = true;
+                                return 0L;
+                            }
+                            wasNull[0] = false;
+                            return lines[idx.get()].productId();
+                        });
+                        lenient().when(rs.getLong("quantity")).thenAnswer(i -> {
+                            if (idx.get() < 0 || idx.get() >= lines.length) {
+                                wasNull[0] = true;
+                                return 0L;
+                            }
+                            wasNull[0] = false;
+                            return lines[idx.get()].quantity();
+                        });
+                        lenient().when(rs.getBigDecimal("unit_price")).thenAnswer(i -> {
+                            if (idx.get() < 0 || idx.get() >= lines.length) {
+                                wasNull[0] = true;
+                                return null;
+                            }
+                            wasNull[0] = false;
+                            return lines[idx.get()].unitPrice();
+                        });
+                        lenient().when(rs.getBigDecimal("line_total")).thenAnswer(i -> {
+                            if (idx.get() < 0 || idx.get() >= lines.length) {
+                                wasNull[0] = true;
+                                return null;
+                            }
+                            wasNull[0] = false;
+                            return lines[idx.get()].lineTotal();
+                        });
+                        lenient().when(rs.wasNull()).thenAnswer(i -> wasNull[0]);
                     }
                     return extractor.extractData(rs);
-                });
-    }
-
-    @SuppressWarnings("unchecked")
-    private void stubFindLines(OrderView.OrderLineView... lines) {
-        when(jdbcTemplate.query(anyString(), any(RowMapper.class), eq(1L), eq(9L)))
-                .thenAnswer(inv -> {
-                    RowMapper<OrderView.OrderLineView> mapper = inv.getArgument(1);
-                    var result = new java.util.ArrayList<OrderView.OrderLineView>();
-                    for (OrderView.OrderLineView l : lines) {
-                        var rs = mock(java.sql.ResultSet.class);
-                        when(rs.getLong("product_id")).thenReturn(l.productId());
-                        when(rs.getLong("quantity")).thenReturn(l.quantity());
-                        when(rs.getBigDecimal("unit_price")).thenReturn(l.unitPrice());
-                        when(rs.getBigDecimal("line_total")).thenReturn(l.lineTotal());
-                        result.add(mapper.mapRow(rs, 0));
-                    }
-                    return result;
                 });
     }
 
@@ -88,12 +126,11 @@ class OrderDaoTest {
     }
 
     @Test
-    void shouldFindByIdWithLines() {
-        stubFindHeader(true);
-        var expected = new OrderView.OrderLineView(5L, 2L, new BigDecimal("100.00"), new BigDecimal("200.00"));
-        stubFindLines(expected);
+    void shouldFindByIdWithLinesInSingleQuery() {
+        stubFindById(true,
+                new OrderBO.OrderLineBO(5L, 2L, new BigDecimal("100.00"), new BigDecimal("200.00")));
 
-        OrderView result = orderDao.findById(9L, 1L);
+        OrderBO result = orderDao.findById(9L, 1L);
 
         assertEquals(1L, result.orderId());
         assertEquals("ORD-001", result.orderNumber());
@@ -104,14 +141,17 @@ class OrderDaoTest {
         assertEquals(1, result.lines().size());
         assertEquals(5L, result.lines().get(0).productId());
         assertEquals(2L, result.lines().get(0).quantity());
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, times(1))
+                .query(sql.capture(), any(ResultSetExtractor.class), eq(1L), eq(9L));
+        assertTrue(sql.getValue().contains("v_order_detail"));
     }
 
     @Test
     void shouldFindByIdWithEmptyLines() {
-        stubFindHeader(true);
-        stubFindLines();
+        stubFindById(true);
 
-        OrderView result = orderDao.findById(9L, 1L);
+        OrderBO result = orderDao.findById(9L, 1L);
 
         assertEquals(1L, result.orderId());
         assertTrue(result.lines().isEmpty());
@@ -119,7 +159,7 @@ class OrderDaoTest {
 
     @Test
     void shouldThrowOrderNotFound() {
-        stubFindHeader(false);
+        stubFindById(false);
 
         BusinessException ex = assertThrows(BusinessException.class, () -> orderDao.findById(9L, 1L));
 

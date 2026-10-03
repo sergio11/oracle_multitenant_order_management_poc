@@ -82,8 +82,8 @@ class HexagonalArchitectureTest {
             .that(dependsOnSimpleName("MDC", "depend on org.slf4j.MDC"))
             .should().resideInAnyPackage("..execution..", "..web..", "..adapter.web..");
 
-    // 4a. Ports are web-DTO-free: order ports use order.model.OrderView;
-    // tenant ports use tenant.model.NewTenant/TenantView. Scoped per module
+    // 4a. Ports are web-DTO-free: order ports use order.model.OrderBO;
+    // tenant ports use tenant.model.NewTenantBO/TenantBO. Scoped per module
     // because reporting's port-local records (port.output.dto) legitimately
     // live under a "..dto.." segment and must not trip this rule.
     @ArchTest
@@ -124,7 +124,8 @@ class HexagonalArchitectureTest {
             .resideInAnyPackage("..adapter.web..", "..application..");
 
     // 7. Application never touches web DTOs: use cases take primitives and
-    // return model/ records; wire mapping (from()) lives at the web edge.
+    // return model/ records; BO -> DTO mapping (MapStruct mappers under
+    // ..adapter.web.mapper..) lives at the web edge.
     // Scoped to order/tenant like rule 4: reporting's port-local DTOs live
     // under ..port.output.dto.. (deliberate, documented above) and must not
     // trip this rule.

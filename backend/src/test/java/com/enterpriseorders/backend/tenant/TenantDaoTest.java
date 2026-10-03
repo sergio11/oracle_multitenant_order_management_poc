@@ -3,8 +3,8 @@ package com.enterpriseorders.backend.tenant;
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;
 import com.enterpriseorders.backend.tenant.adapter.persistence.TenantDao;
-import com.enterpriseorders.backend.tenant.model.NewTenant;
-import com.enterpriseorders.backend.tenant.model.TenantView;
+import com.enterpriseorders.backend.tenant.model.NewTenantBO;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -63,7 +63,7 @@ class TenantDaoTest {
     void shouldFindById() {
         when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq(1L)))
             .thenAnswer(inv -> {
-                ResultSetExtractor<TenantView> extractor = inv.getArgument(1);
+                ResultSetExtractor<TenantBO> extractor = inv.getArgument(1);
                 var rs = mock(java.sql.ResultSet.class);
                 when(rs.next()).thenReturn(true);
                 when(rs.getLong("tenant_id")).thenReturn(1L);
@@ -74,7 +74,7 @@ class TenantDaoTest {
                 when(rs.getString("isolation_mode")).thenReturn("SHARED_SCHEMA");
                 return extractor.extractData(rs);
             });
-        TenantView result = tenantDao.findById(1L);
+        TenantBO result = tenantDao.findById(1L);
         assertEquals("ACME", result.tenantCode());
     }
 
@@ -82,7 +82,7 @@ class TenantDaoTest {
     void shouldThrowWhenTenantNotFoundById() {
         when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq(999L)))
             .thenAnswer(inv -> {
-                ResultSetExtractor<TenantView> extractor = inv.getArgument(1);
+                ResultSetExtractor<TenantBO> extractor = inv.getArgument(1);
                 var rs = mock(java.sql.ResultSet.class);
                 when(rs.next()).thenReturn(false);
                 return extractor.extractData(rs);
@@ -101,7 +101,7 @@ class TenantDaoTest {
             return cb.doInConnection(conn);
         });
 
-        Long id = tenantDao.create(new NewTenant(" ACME ", " Acme Corp ", "STANDARD", "SHARED_SCHEMA"));
+        Long id = tenantDao.create(new NewTenantBO(" ACME ", " Acme Corp ", "STANDARD", "SHARED_SCHEMA"));
 
         assertEquals(7L, id);
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
@@ -126,7 +126,7 @@ class TenantDaoTest {
         });
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> tenantDao.create(new NewTenant("ACME", "Acme Corp", "STANDARD", "SHARED_SCHEMA")));
+                () -> tenantDao.create(new NewTenantBO("ACME", "Acme Corp", "STANDARD", "SHARED_SCHEMA")));
 
         assertEquals("TENANT_ALREADY_EXISTS", ex.getCode());
         assertEquals(HttpStatus.CONFLICT, GlobalExceptionHandler.statusFor(ex.getCode()));

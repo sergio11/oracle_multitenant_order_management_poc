@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.order.application;
 
 import com.enterpriseorders.backend.exception.BusinessException;
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.model.OrderBO;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore;
 import com.enterpriseorders.backend.order.port.output.IdempotencyStore.IdempotencyRecord;
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
@@ -65,9 +65,9 @@ public class IdempotentOperationExecutor {
         this.objectMapper = objectMapper;
     }
 
-    public OrderView execute(Long tenantId, String idempotencyKey, String operation,
+    public OrderBO execute(Long tenantId, String idempotencyKey, String operation,
                                   Long aggregateId, String requestFingerprint,
-                                  Supplier<OrderView> action) {
+                                  Supplier<OrderBO> action) {
         if (idempotencyKey == null) {
             return action.get();
         }
@@ -100,9 +100,9 @@ public class IdempotentOperationExecutor {
         return complete(tenantId, idempotencyKey, aggregateId, action);
     }
 
-    private OrderView resolve(Long tenantId, String idempotencyKey, IdempotencyRecord record,
+    private OrderBO resolve(Long tenantId, String idempotencyKey, IdempotencyRecord record,
                                    String operation, Long aggregateId, String requestFingerprint,
-                                   Supplier<OrderView> action) {
+                                   Supplier<OrderBO> action) {
         validateKeyMatches(record, idempotencyKey, operation, aggregateId, requestFingerprint);
         if ("COMPLETED".equals(record.status())) {
             return replay(tenantId, record);
@@ -117,11 +117,11 @@ public class IdempotentOperationExecutor {
         throw new IllegalStateException("Unexpected idempotency status: " + record.status());
     }
 
-    private OrderView replay(Long tenantId, IdempotencyRecord record) {
+    private OrderBO replay(Long tenantId, IdempotencyRecord record) {
         String payload = record.responsePayload();
         if (payload != null && !payload.isBlank()) {
             try {
-                return objectMapper.readValue(payload, OrderView.class);
+                return objectMapper.readValue(payload, OrderBO.class);
             } catch (JsonProcessingException e) {
                 throw new IllegalStateException(
                         "Stored idempotent response could not be deserialized", e);
@@ -134,9 +134,9 @@ public class IdempotentOperationExecutor {
                 "Original response for this idempotency key is unavailable");
     }
 
-    private OrderView complete(Long tenantId, String idempotencyKey, Long aggregateId,
-                                 Supplier<OrderView> action) {
-        OrderView response = action.get();
+    private OrderBO complete(Long tenantId, String idempotencyKey, Long aggregateId,
+                                 Supplier<OrderBO> action) {
+        OrderBO response = action.get();
         // Backfill the real aggregate: CREATE_ORDER inserts PENDING with the
         // 0 sentinel, so the created order's id must be persisted now, or a
         // later payload-less replay could not fall back to findById.
@@ -150,12 +150,12 @@ public class IdempotentOperationExecutor {
         return response;
     }
 
-    private String serializeForStorage(OrderView response) {
+    private String serializeForStorage(OrderBO response) {
         String json = serialize(response);
         return json.length() > MAX_PAYLOAD_LENGTH ? null : json;
     }
 
-    private String serialize(OrderView response) {
+    private String serialize(OrderBO response) {
         try {
             return objectMapper.writeValueAsString(response);
         } catch (JsonProcessingException e) {

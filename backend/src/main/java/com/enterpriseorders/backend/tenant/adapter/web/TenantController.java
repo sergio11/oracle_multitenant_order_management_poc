@@ -1,8 +1,8 @@
 package com.enterpriseorders.backend.tenant.adapter.web;
 
-import com.enterpriseorders.backend.tenant.dto.TenantRequest;
-import com.enterpriseorders.backend.tenant.dto.TenantResponse;
-import com.enterpriseorders.backend.tenant.model.NewTenant;
+import com.enterpriseorders.backend.tenant.adapter.web.mapper.TenantMapper;
+import com.enterpriseorders.backend.tenant.dto.TenantRequestDTO;
+import com.enterpriseorders.backend.tenant.dto.TenantResponseDTO;
 import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import jakarta.validation.Valid;
@@ -27,22 +27,24 @@ public class TenantController {
 
     private final CreateTenantUseCase createTenantUseCase;
     private final GetTenantQuery getTenantQuery;
+    private final TenantMapper tenantMapper;
 
-    public TenantController(CreateTenantUseCase createTenantUseCase, GetTenantQuery getTenantQuery) {
+    public TenantController(CreateTenantUseCase createTenantUseCase, GetTenantQuery getTenantQuery,
+                            TenantMapper tenantMapper) {
         this.createTenantUseCase = createTenantUseCase;
         this.getTenantQuery = getTenantQuery;
+        this.tenantMapper = tenantMapper;
     }
 
     @PostMapping
-    public ResponseEntity<TenantResponse> createTenant(@Valid @RequestBody TenantRequest request) {
-        NewTenant newTenant = new NewTenant(
-                request.tenantCode(), request.name(), request.tier(), request.isolationMode());
+    public ResponseEntity<TenantResponseDTO> createTenant(@Valid @RequestBody TenantRequestDTO request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(TenantResponse.from(createTenantUseCase.createTenant(newTenant)));
+                .body(tenantMapper.toResponse(
+                        createTenantUseCase.createTenant(tenantMapper.toNewTenant(request))));
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<TenantResponse> getTenant(@PathVariable Long id) {
-        return ResponseEntity.ok(TenantResponse.from(getTenantQuery.getTenant(id)));
+    public ResponseEntity<TenantResponseDTO> getTenant(@PathVariable Long id) {
+        return ResponseEntity.ok(tenantMapper.toResponse(getTenantQuery.getTenant(id)));
     }
 }

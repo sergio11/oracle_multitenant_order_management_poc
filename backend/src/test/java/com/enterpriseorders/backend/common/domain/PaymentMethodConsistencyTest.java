@@ -1,6 +1,6 @@
 package com.enterpriseorders.backend.common.domain;
 
-import com.enterpriseorders.backend.order.dto.PaymentRequest;
+import com.enterpriseorders.backend.order.dto.PaymentRequestDTO;
 import jakarta.validation.constraints.Pattern;
 import org.junit.jupiter.api.Test;
 
@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * Locks {@link PaymentMethod} to the {@code @Pattern} regex on
- * {@code PaymentRequest.paymentMethod} so the two copies of the payment
+ * {@code PaymentRequestDTO.paymentMethod} so the two copies of the payment
  * method literals cannot drift apart.
  *
  * <p>Approach chosen: reflection on the record component (with accessor and
@@ -43,7 +43,7 @@ class PaymentMethodConsistencyTest {
     }
 
     private String paymentMethodRegexp() {
-        RecordComponent component = Arrays.stream(PaymentRequest.class.getRecordComponents())
+        RecordComponent component = Arrays.stream(PaymentRequestDTO.class.getRecordComponents())
                 .filter(c -> c.getName().equals("paymentMethod"))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("paymentMethod component not found"));
@@ -54,7 +54,7 @@ class PaymentMethodConsistencyTest {
         }
         if (pattern == null) {
             try {
-                pattern = PaymentRequest.class.getDeclaredField("paymentMethod")
+                pattern = PaymentRequestDTO.class.getDeclaredField("paymentMethod")
                         .getAnnotation(Pattern.class);
             } catch (NoSuchFieldException e) {
                 throw new AssertionError("paymentMethod field not found", e);

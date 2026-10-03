@@ -2,7 +2,8 @@ package com.enterpriseorders.backend.security;
 
 import com.enterpriseorders.backend.config.SecurityConfig;
 import com.enterpriseorders.backend.order.adapter.web.OrderController;
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.adapter.web.mapper.OrderMapperImpl;
+import com.enterpriseorders.backend.order.model.OrderBO;
 import com.enterpriseorders.backend.order.port.input.AddOrderLineUseCase;
 import com.enterpriseorders.backend.order.port.input.CancelOrderUseCase;
 import com.enterpriseorders.backend.order.port.input.ConfirmOrderUseCase;
@@ -11,7 +12,8 @@ import com.enterpriseorders.backend.order.port.input.GetOrderQuery;
 import com.enterpriseorders.backend.order.port.input.RegisterPaymentUseCase;
 import com.enterpriseorders.backend.tenant.adapter.web.TenantContextFilter;
 import com.enterpriseorders.backend.tenant.adapter.web.TenantController;
-import com.enterpriseorders.backend.tenant.model.TenantView;
+import com.enterpriseorders.backend.tenant.adapter.web.mapper.TenantMapperImpl;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
@@ -52,7 +54,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * mocked; @WithMockUser supplies the principal (bypasses password checks).
  */
 @WebMvcTest({TenantController.class, OrderController.class})
-@Import({SecurityConfig.class, TenantContextFilter.class, CorrelationFilter.class})
+@Import({SecurityConfig.class, TenantContextFilter.class, CorrelationFilter.class,
+        OrderMapperImpl.class, TenantMapperImpl.class})
 @TestPropertySource(properties = {
         "app.security.admin.password=admin-test-password-123",
         "app.security.operator.password=operator-test-password-123",
@@ -95,7 +98,7 @@ class SecurityMatrixTest {
     @WithMockUser(username = "admin", roles = {"ADMIN", "ORDER_OPERATOR"})
     void adminCanCreateTenant() throws Exception {
         when(createTenantUseCase.createTenant(any())).thenReturn(
-                new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
+                new TenantBO(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
         mockMvc.perform(post("/api/v1/tenants")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"tenantCode\":\"ACME\",\"name\":\"Acme Corp\",\"tier\":\"STANDARD\"}"))
@@ -122,7 +125,7 @@ class SecurityMatrixTest {
         when(roleTenancy.isAllowed("ACME")).thenReturn(true);
         when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenReturn(1L);
         when(getOrderQuery.getOrder(1L)).thenReturn(
-                new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of()));
+                new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of()));
         mockMvc.perform(get("/api/v1/orders/1")
                         .header("X-Tenant-ID", "ACME"))
                 .andExpect(status().isOk())

@@ -2,8 +2,8 @@ package com.enterpriseorders.backend.tenant;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.application.TenantService;
-import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;import com.enterpriseorders.backend.tenant.model.NewTenant;
-import com.enterpriseorders.backend.tenant.model.TenantView;
+import com.enterpriseorders.backend.web.error.GlobalExceptionHandler;import com.enterpriseorders.backend.tenant.model.NewTenantBO;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,10 +21,10 @@ class TenantServiceTest {
 
     @Test
     void shouldCreateTenant() {
-        var request = new NewTenant("ACME", "Acme Corp", "STANDARD", "SHARED_SCHEMA");
+        var request = new NewTenantBO("ACME", "Acme Corp", "STANDARD", "SHARED_SCHEMA");
         when(tenantRepository.create(request)).thenReturn(1L);
-        when(tenantRepository.findById(1L)).thenReturn(new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
-        TenantView result = tenantService.createTenant(request);
+        when(tenantRepository.findById(1L)).thenReturn(new TenantBO(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
+        TenantBO result = tenantService.createTenant(request);
         assertEquals(1L, result.tenantId());
         assertEquals("ACME", result.tenantCode());
         verify(tenantRepository).create(request);
@@ -33,8 +33,8 @@ class TenantServiceTest {
 
     @Test
     void shouldGetTenant() {
-        when(tenantRepository.findById(1L)).thenReturn(new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
-        TenantView result = tenantService.getTenant(1L);
+        when(tenantRepository.findById(1L)).thenReturn(new TenantBO(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
+        TenantBO result = tenantService.getTenant(1L);
         assertEquals("ACME", result.tenantCode());
         verify(tenantRepository).findById(1L);
     }
@@ -60,15 +60,15 @@ class TenantServiceTest {
     void shouldNormalizeTenantCodeToUppercaseOnCreate() {
         // Closure fix: resolution is case-insensitive (filter uppercases),
         // so a verbatim lowercase code would provision an unreachable
-        // tenant. NewTenant normalizes at the application boundary.
-        var request = new NewTenant(" acme ", "Acme Corp", "STANDARD", "SHARED_SCHEMA");
+        // tenant. NewTenantBO normalizes at the application boundary.
+        var request = new NewTenantBO(" acme ", "Acme Corp", "STANDARD", "SHARED_SCHEMA");
         assertEquals("ACME", request.tenantCode());
 
         when(tenantRepository.create(request)).thenReturn(1L);
-        when(tenantRepository.findById(1L)).thenReturn(new TenantView(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
+        when(tenantRepository.findById(1L)).thenReturn(new TenantBO(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
         tenantService.createTenant(request);
 
-        var captor = org.mockito.ArgumentCaptor.forClass(NewTenant.class);
+        var captor = org.mockito.ArgumentCaptor.forClass(NewTenantBO.class);
         verify(tenantRepository).create(captor.capture());
         assertEquals("ACME", captor.getValue().tenantCode());
     }

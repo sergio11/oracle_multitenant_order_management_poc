@@ -7,7 +7,7 @@ import jakarta.validation.constraints.NotNull;
 /**
  * Request payload for adding a line to an order (SRS ��53).
  */
-public record OrderLineRequest(
+public record OrderLineRequestDTO(
         @NotNull Long productId,
         @NotNull @Min(1) @Max(999999999999L) Long quantity
 ) {

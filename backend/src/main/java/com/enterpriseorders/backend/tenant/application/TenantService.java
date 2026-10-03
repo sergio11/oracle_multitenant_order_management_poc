@@ -1,8 +1,8 @@
 package com.enterpriseorders.backend.tenant.application;
 
 import com.enterpriseorders.backend.exception.BusinessException;
-import com.enterpriseorders.backend.tenant.model.NewTenant;
-import com.enterpriseorders.backend.tenant.model.TenantView;
+import com.enterpriseorders.backend.tenant.model.NewTenantBO;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.input.CreateTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.input.GetTenantQuery;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
@@ -20,13 +20,13 @@ public class TenantService implements CreateTenantUseCase, GetTenantQuery, Resol
     }
 
     @Transactional
-    public TenantView createTenant(NewTenant request) {
+    public TenantBO createTenant(NewTenantBO request) {
         Long tenantId = tenantRepository.create(request);
         return tenantRepository.findById(tenantId);
     }
 
     @Transactional(readOnly = true)
-    public TenantView getTenant(Long tenantId) {
+    public TenantBO getTenant(Long tenantId) {
         return tenantRepository.findById(tenantId);
     }
 

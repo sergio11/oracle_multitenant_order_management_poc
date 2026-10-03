@@ -2,8 +2,8 @@ package com.enterpriseorders.backend.tenant.adapter.persistence;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.exception.PlsqlErrorMapper;
-import com.enterpriseorders.backend.tenant.model.NewTenant;
-import com.enterpriseorders.backend.tenant.model.TenantView;
+import com.enterpriseorders.backend.tenant.model.NewTenantBO;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.output.TenantRepository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -34,7 +34,7 @@ public class TenantDao implements TenantRepository {
     }
 
     @Override
-    public Long create(NewTenant request) {
+    public Long create(NewTenantBO request) {
         return jdbcTemplate.execute((Connection connection) -> {
             try (CallableStatement cs = connection.prepareCall(
                     "{ ? = call pkg_tenant.create_tenant(?, ?, ?, ?) }")) {
@@ -52,7 +52,7 @@ public class TenantDao implements TenantRepository {
     }
 
     @Override
-    public TenantView findById(Long tenantId) {
+    public TenantBO findById(Long tenantId) {
         return jdbcTemplate.query(
                 "SELECT tenant_id, tenant_code, name, tier, status, isolation_mode " +
                 "FROM tenant WHERE tenant_id = ?",
@@ -61,7 +61,7 @@ public class TenantDao implements TenantRepository {
                         throw new BusinessException("TENANT_NOT_FOUND",
                                 "Tenant not found: " + tenantId);
                     }
-                    return new TenantView(
+                    return new TenantBO(
                             rs.getLong("tenant_id"),
                             rs.getString("tenant_code"),
                             rs.getString("name"),

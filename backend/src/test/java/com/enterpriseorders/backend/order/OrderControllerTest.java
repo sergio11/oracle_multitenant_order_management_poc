@@ -2,7 +2,8 @@ package com.enterpriseorders.backend.order;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.order.adapter.web.OrderController;
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.adapter.web.mapper.OrderMapperImpl;
+import com.enterpriseorders.backend.order.model.OrderBO;
 import com.enterpriseorders.backend.order.port.input.*;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import java.math.BigDecimal;
@@ -23,6 +25,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(OrderController.class)
+@Import(OrderMapperImpl.class)
 @AutoConfigureMockMvc(addFilters = false)
 class OrderControllerTest {
     @Autowired private MockMvc mockMvc;
@@ -38,7 +41,7 @@ class OrderControllerTest {
     @MockBean private RoleTenancy roleTenancy;
 
     private static final String BASE = "/api/v1/orders";
-    private final OrderView mockOrder = new OrderView(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of());
+    private final OrderBO mockOrder = new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of());
 
     @Test
     void shouldCreateOrder() throws Exception {
@@ -73,8 +76,8 @@ class OrderControllerTest {
 
     @Test
     void shouldGetOrderWithLines() throws Exception {
-        var withLines = new OrderView(1L, "ORD-001", 100L, "PENDING", "USD", BigDecimal.valueOf(10), 1,
-                List.of(new OrderView.OrderLineView(10L, 5L, BigDecimal.valueOf(2), BigDecimal.valueOf(10))));
+        var withLines = new OrderBO(1L, "ORD-001", 100L, "PENDING", "USD", BigDecimal.valueOf(10), 1,
+                List.of(new OrderBO.OrderLineBO(10L, 5L, BigDecimal.valueOf(2), BigDecimal.valueOf(10))));
         when(getOrderQuery.getOrder(1L)).thenReturn(withLines);
         mockMvc.perform(get(BASE + "/1"))
                 .andExpect(status().isOk())
@@ -85,7 +88,7 @@ class OrderControllerTest {
 
     @Test
     void shouldConfirmOrder() throws Exception {
-        var confirmed = new OrderView(1L, "ORD-001", 100L, "CONFIRMED", "USD", BigDecimal.ZERO, 1, List.of());
+        var confirmed = new OrderBO(1L, "ORD-001", 100L, "CONFIRMED", "USD", BigDecimal.ZERO, 1, List.of());
         when(confirmOrderUseCase.confirmOrder(1L, "key-123")).thenReturn(confirmed);
         mockMvc.perform(post(BASE + "/1/confirm")
                 .header("Idempotency-Key", "key-123"))
@@ -95,7 +98,7 @@ class OrderControllerTest {
 
     @Test
     void shouldCancelOrderWithReason() throws Exception {
-        var cancelled = new OrderView(1L, "ORD-001", 100L, "CANCELLED", "USD", BigDecimal.ZERO, 1, List.of());
+        var cancelled = new OrderBO(1L, "ORD-001", 100L, "CANCELLED", "USD", BigDecimal.ZERO, 1, List.of());
         when(cancelOrderUseCase.cancelOrder(1L, "Customer request", null)).thenReturn(cancelled);
         mockMvc.perform(post(BASE + "/1/cancel")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -106,7 +109,7 @@ class OrderControllerTest {
 
     @Test
     void shouldCancelOrderWithIdempotencyKey() throws Exception {
-        var cancelled = new OrderView(1L, "ORD-001", 100L, "CANCELLED", "USD", BigDecimal.ZERO, 1, List.of());
+        var cancelled = new OrderBO(1L, "ORD-001", 100L, "CANCELLED", "USD", BigDecimal.ZERO, 1, List.of());
         when(cancelOrderUseCase.cancelOrder(1L, "Customer request", "key-c")).thenReturn(cancelled);
         mockMvc.perform(post(BASE + "/1/cancel")
                 .header("Idempotency-Key", "key-c")
@@ -139,7 +142,7 @@ class OrderControllerTest {
 
     @Test
     void shouldRegisterPayment() throws Exception {
-        var paid = new OrderView(1L, "ORD-001", 100L, "PAID", "USD", BigDecimal.valueOf(50), 2, List.of());
+        var paid = new OrderBO(1L, "ORD-001", 100L, "PAID", "USD", BigDecimal.valueOf(50), 2, List.of());
         when(registerPaymentUseCase.registerPayment(eq(1L), eq("PAY-001"), any(), eq("USD"), eq("CARD"), isNull()))
                 .thenReturn(paid);
         mockMvc.perform(post(BASE + "/1/payments")
@@ -160,7 +163,7 @@ class OrderControllerTest {
     }
 
     @Test
-    void shouldReturn400WhenInvalidCreateOrderRequest() throws Exception {
+    void shouldReturn400WhenInvalidCreateOrderRequestDTO() throws Exception {
         mockMvc.perform(post(BASE)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"currency\":\"USD\"}"))

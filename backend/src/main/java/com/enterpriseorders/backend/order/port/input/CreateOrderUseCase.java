@@ -1,7 +1,7 @@
 package com.enterpriseorders.backend.order.port.input;
 
-import com.enterpriseorders.backend.order.model.OrderView;
+import com.enterpriseorders.backend.order.model.OrderBO;
 
 public interface CreateOrderUseCase {
-    OrderView createOrder(Long customerId, String currency, String idempotencyKey);
+    OrderBO createOrder(Long customerId, String currency, String idempotencyKey);
 }

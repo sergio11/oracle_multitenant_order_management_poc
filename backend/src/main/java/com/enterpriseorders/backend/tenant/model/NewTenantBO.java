@@ -3,7 +3,7 @@ package com.enterpriseorders.backend.tenant.model;
 /**
  * Neutral write model for tenant provisioning (A3).
  *
- * <p>Mirrors the web-facing {@code dto.TenantRequest} field-for-field
+ * <p>Mirrors the web-facing {@code dto.TenantRequestDTO} field-for-field
  * (validation stays on the DTO at the edge). The controller maps the
  * request DTO to this type before calling the input port.
  *
@@ -14,13 +14,13 @@ package com.enterpriseorders.backend.tenant.model;
  * to create a tenant that could never be reached - uniqueness is
  * case-sensitive in Oracle while every read uppercases first.
  */
-public record NewTenant(
+public record NewTenantBO(
         String tenantCode,
         String name,
         String tier,
         String isolationMode
 ) {
-    public NewTenant {
+    public NewTenantBO {
         tenantCode = tenantCode == null ? null : tenantCode.trim().toUpperCase();
     }
 }
