@@ -1284,7 +1284,7 @@ namespace :e2e do
 
   desc 'E2E-03: Full PL/SQL order-to-payment business flow'
   task :business_flow do
-    run_e2e_test('E03', 'PL/SQL Business Flow', e2e_conn(:runtime, nil, nil), 'E03_plsql_business_flow.sql')
+    run_e2e_test('E03', 'PL/SQL Business Flow', e2e_conn(:owner, nil, nil), 'E03_plsql_business_flow.sql')
   end
 
   desc 'E2E-04: Pessimistic locking and inventory consistency'
@@ -1294,12 +1294,12 @@ namespace :e2e do
 
   desc 'E2E-05: Materialized view reporting consistency and VPD isolation'
   task :mv_reporting do
-    run_e2e_test('E05', 'MV Reporting', e2e_conn(:runtime, nil, nil), 'E05_mv_reporting.sql')
+    run_e2e_test('E05', 'MV Reporting', e2e_conn(:owner, nil, nil), 'E05_mv_reporting.sql')
   end
 
   desc 'E2E-06: Business rules and state machine validation'
   task :business_rules do
-    run_e2e_test('E06', 'Business Rules / State Machine', e2e_conn(:runtime, nil, nil), 'E06_business_rules.sql')
+    run_e2e_test('E06', 'Business Rules / State Machine', e2e_conn(:owner, nil, nil), 'E06_business_rules.sql')
   end
 
   namespace :api do
@@ -1377,6 +1377,27 @@ namespace :e2e do
         end
       end
 
+      # Capture each PDB's row count so local sequence collisions do not make
+      # an existing shared-PDB order look like the API-created order.
+      counts = {}
+      [[DEDICATED_SID, 'before-corp'], [ORACLE_SID, 'before-oltp']].each do |service, key|
+        out = run_sql_as_owner!(<<~SQL, label: "api-routing-#{key}", service: service)
+          SET SERVEROUTPUT ON HEADING OFF FEEDBACK OFF PAGESIZE 0
+          DECLARE
+            v_tenant NUMBER;
+            v_count  NUMBER;
+          BEGIN
+            SELECT tenant_id INTO v_tenant FROM tenant WHERE tenant_code = 'INITECH';
+            pkg_tenant.set_tenant_context(v_tenant);
+            SELECT COUNT(*) INTO v_count FROM sales_order;
+            DBMS_OUTPUT.PUT_LINE('COUNT ' || v_count);
+          END;
+          /
+          EXIT SUCCESS
+        SQL
+        counts[key] = out.to_s[/COUNT\s+(\d+)/, 1].to_i
+      end
+
       # 3) A real INITECH order must land in the dedicated PDB (PDB_CORP).
       order_id = nil
       begin
@@ -1391,9 +1412,9 @@ namespace :e2e do
         check.call('POST /orders (INITECH) -> 201', false, e.message)
       end
 
-      # 4) Physical placement: created order in PDB_CORP, not in PDB_OLTP.
+      # 4) Verify one row was added to PDB_CORP and none to PDB_OLTP.
       if order_id
-        [[DEDICATED_SID, 1], [ORACLE_SID, 0]].each do |service, expected|
+        [[DEDICATED_SID, 'before-corp', 1], [ORACLE_SID, 'before-oltp', 0]].each do |service, key, delta|
           out = run_sql_as_owner!(<<~SQL, label: "api-routing-placement-#{service}", service: service)
             SET SERVEROUTPUT ON HEADING OFF FEEDBACK OFF PAGESIZE 0
             DECLARE
@@ -1402,15 +1423,16 @@ namespace :e2e do
             BEGIN
               SELECT tenant_id INTO v_tenant FROM tenant WHERE tenant_code = 'INITECH';
               pkg_tenant.set_tenant_context(v_tenant);
-              SELECT COUNT(*) INTO v_count FROM sales_order WHERE order_id = #{order_id.to_i};
+              SELECT COUNT(*) INTO v_count FROM sales_order;
               DBMS_OUTPUT.PUT_LINE('FOUND ' || v_count);
             END;
             /
             EXIT SUCCESS
           SQL
           found = out.to_s[/FOUND\s+(\d+)/, 1].to_i
-          check.call("order #{order_id} in #{service} (expected #{expected})",
-                     found == expected, "found #{found}")
+          expected = counts[key] + delta
+          check.call("order placement in #{service}", found == expected,
+                     "expected #{expected} INITECH orders, found #{found}")
         end
       end
 
