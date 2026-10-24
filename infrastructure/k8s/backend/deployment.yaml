@@ -44,6 +44,8 @@ spec:
               value: local
             - name: ORACLE_URL
               value: jdbc:oracle:thin:@oracle:1521/pdb_oltp
+            - name: ORACLE_DEDICATED_URL
+              value: jdbc:oracle:thin:@oracle:1521/pdb_corp
             - name: ORACLE_USER
               value: APP_RUNTIME
             - name: ORACLE_PASSWORD
