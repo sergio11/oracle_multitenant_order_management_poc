@@ -11,5 +11,9 @@ public interface TenantContextHolder {
 
     void setTenantId(Long tenantId);
 
+    default void setTenantDetails(Long tenantId, String tenantCode, String tier) {
+        setTenantId(tenantId);
+    }
+
     void clear();
 }

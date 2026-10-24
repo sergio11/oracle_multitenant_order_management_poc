@@ -21,13 +21,22 @@ spring:
     locations: classpath:db/migration
 
 oracle:
-  url: ${ORACLE_URL:jdbc:oracle:thin:@localhost:1521/pdb_oltp}
+  url: ${ORACLE_URL:jdbc:oracle:thin:@(DESCRIPTION=(CONNECT_TIMEOUT=5)(RETRY_COUNT=3)(RETRY_DELAY=2)(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=localhost)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=pdb_oltp)))}
+  dedicated-url: ${ORACLE_DEDICATED_URL:jdbc:oracle:thin:@localhost:1521/pdb_corp}
   username: ${ORACLE_USER:APP_RUNTIME}
   password: ${ORACLE_PASSWORD}
   ucp:
-    initial-pool-size: 5
-    min-pool-size: 5
-    max-pool-size: 20
+    initial-pool-size: 3
+    min-pool-size: 3
+    max-pool-size: 10
+    dedicated:
+      # Pool for the dedicated PDB (PDB_CORP). Deliberately lazy: connections
+      # are only opened when an ENTERPRISE tenant is routed there, so the
+      # service starts without the dedicated PDB and fails closed on it
+      # (fail-closed, never a silent fallback to the shared pool).
+      initial-pool-size: 0
+      min-pool-size: 0
+      max-pool-size: 5
     connection-wait-timeout: 30
     inactive-connection-timeout: 300
     abandoned-connection-timeout: 60

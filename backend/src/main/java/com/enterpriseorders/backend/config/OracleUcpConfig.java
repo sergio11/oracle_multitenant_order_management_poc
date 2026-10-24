@@ -13,11 +13,14 @@ import javax.sql.DataSource;
 import java.sql.SQLException;
 
 /**
- * Oracle UCP (Universal Connection Pool) configuration.
+ * Oracle UCP (Universal Connection Pool) configuration with Multitenant Routing.
  *
- * Implements SRS §51: connection pooling using Oracle UCP with timeout,
- * health-check and RAC-ready behavior. The pool is created programmatically
- * via PoolDataSourceFactory so we control all Oracle-specific settings.
+ * Implements SRS §51: connection pooling using Oracle UCP with timeout
+ * and health-check validation on borrow.
+ *
+ * Supports dynamic routing between:
+ *   - Shared Pool (PDB_OLTP) with VPD isolation for STANDARD tenants.
+ *   - Dedicated Pool (PDB_CORP) with physical PDB isolation for ENTERPRISE tenants.
  */
 @Configuration
 public class OracleUcpConfig {
@@ -25,20 +28,36 @@ public class OracleUcpConfig {
     @Value("${oracle.url}")
     private String url;
 
+    @Value("${oracle.dedicated-url:${oracle.url}}")
+    private String dedicatedUrl;
+
     @Value("${oracle.username}")
     private String username;
 
     @Value("${oracle.password}")
     private String password;
 
-    @Value("${oracle.ucp.initial-pool-size:5}")
+    @Value("${oracle.ucp.initial-pool-size:3}")
     private int initialPoolSize;
 
-    @Value("${oracle.ucp.min-pool-size:5}")
+    @Value("${oracle.ucp.min-pool-size:3}")
     private int minPoolSize;
 
-    @Value("${oracle.ucp.max-pool-size:20}")
+    @Value("${oracle.ucp.max-pool-size:10}")
     private int maxPoolSize;
+
+    // Dedicated (PDB_CORP) pool is lazy by default: no connection is opened
+    // until an ENTERPRISE tenant is actually routed there, so the service
+    // starts (and stays healthy on the shared pool) when the dedicated PDB
+    // is absent or unprovisioned.
+    @Value("${oracle.ucp.dedicated.initial-pool-size:0}")
+    private int dedicatedInitialPoolSize;
+
+    @Value("${oracle.ucp.dedicated.min-pool-size:0}")
+    private int dedicatedMinPoolSize;
+
+    @Value("${oracle.ucp.dedicated.max-pool-size:5}")
+    private int dedicatedMaxPoolSize;
 
     @Value("${oracle.ucp.connection-wait-timeout:30}")
     private int connectionWaitTimeout;
@@ -58,33 +77,44 @@ public class OracleUcpConfig {
     @Value("${oracle.schema:APP_OWNER}")
     private String schema;
 
-    // NOTE: destroyMethod is explicitly disabled. The runtime class returned
-    // by PoolDataSourceFactory exposes no public no-arg close(), so Spring's
-    // DisposableBeanAdapter fails startup with "Could not find a destroy
-    // method named 'close'". The pool is JVM-scoped (server-side sessions are
-    // reclaimed on JVM exit); per-request connections ARE closed properly via
-    // the TenantAwareDataSource proxy.
     @Bean(name = "oraclePoolDataSource", destroyMethod = "")
     public PoolDataSource oraclePoolDataSource() throws SQLException {
         PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
-
-        // JDBC driver (Oracle)
         pds.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource");
         pds.setURL(url);
         pds.setUser(username);
         pds.setPassword(password);
 
-        // Pool sizing (SRS §51, FT-002)
         pds.setInitialPoolSize(initialPoolSize);
         pds.setMinPoolSize(minPoolSize);
         pds.setMaxPoolSize(maxPoolSize);
 
-        // Timeouts: avoid application hang on pool exhaustion (FT-002)
         pds.setConnectionWaitTimeout(connectionWaitTimeout);
         pds.setInactiveConnectionTimeout(inactiveConnectionTimeout);
         pds.setAbandonedConnectionTimeout(abandonedConnectionTimeout);
 
-        // Health checks: validate connections before borrow (FT-001)
+        pds.setValidateConnectionOnBorrow(validateOnBorrow);
+        pds.setConnectionValidationTimeout(connectionValidationTimeout);
+
+        return pds;
+    }
+
+    @Bean(name = "oracleDedicatedPoolDataSource", destroyMethod = "")
+    public PoolDataSource oracleDedicatedPoolDataSource() throws SQLException {
+        PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
+        pds.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource");
+        pds.setURL(dedicatedUrl);
+        pds.setUser(username);
+        pds.setPassword(password);
+
+        pds.setInitialPoolSize(dedicatedInitialPoolSize);
+        pds.setMinPoolSize(dedicatedMinPoolSize);
+        pds.setMaxPoolSize(dedicatedMaxPoolSize);
+
+        pds.setConnectionWaitTimeout(connectionWaitTimeout);
+        pds.setInactiveConnectionTimeout(inactiveConnectionTimeout);
+        pds.setAbandonedConnectionTimeout(abandonedConnectionTimeout);
+
         pds.setValidateConnectionOnBorrow(validateOnBorrow);
         pds.setConnectionValidationTimeout(connectionValidationTimeout);
 
@@ -92,14 +122,26 @@ public class OracleUcpConfig {
     }
 
     /**
-     * Primary DataSource: the tenant-aware wrapper around the UCP pool.
-     * Each obtained connection gets the session tenant context applied,
-     * which is what makes VPD effective per request (SRS §52).
+     * Dedicated (PDB_CORP) tenant-aware DataSource, exposed on its own so the
+     * tenant-mirroring adapter can talk to the dedicated PDB directly
+     * instead of relying on a routing decision it cannot influence.
+     */
+    @Bean
+    public DataSource dedicatedTenantDataSource(
+            @Qualifier("oracleDedicatedPoolDataSource") DataSource dedicatedPool,
+            TenantContextProvider tenantContext) {
+        return new TenantAwareDataSource(dedicatedPool, tenantContext, schema);
+    }
+
+    /**
+     * Primary DataSource: routes dynamically between shared (VPD) and dedicated (PDB) pools.
      */
     @Bean
     @Primary
-    public DataSource dataSource(@Qualifier("oraclePoolDataSource") DataSource oraclePool,
+    public DataSource dataSource(@Qualifier("oraclePoolDataSource") DataSource sharedPool,
+                                 @Qualifier("dedicatedTenantDataSource") DataSource dedicatedAware,
                                  TenantContextProvider tenantContext) {
-        return new TenantAwareDataSource(oraclePool, tenantContext, schema);
+        DataSource sharedAware = new TenantAwareDataSource(sharedPool, tenantContext, schema);
+        return new TenantRoutingDataSource(sharedAware, dedicatedAware, tenantContext);
     }
 }

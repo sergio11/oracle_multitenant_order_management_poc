@@ -1,8 +1,8 @@
 # kind cluster for local QA (kind + Podman provider).
-# Created via: kind create cluster --name poc-qa --provider podman --config infrastructure/k8s/kind-config.yaml
+# Created via: kind create cluster --name poc-oracle --provider podman --config infrastructure/k8s/kind-config.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-name: poc-qa
+name: poc-oracle
 nodes:
   - role: control-plane
     # NodePorts exposed on the host for QA smoke tests / Flyway from the workstation:

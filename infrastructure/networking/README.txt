@@ -1,20 +1,31 @@
 NETWORKING - LOCAL LAB (POC)
-=============================
+============================
 
-Network topology (local lab, SRS 115):
+Network topology (local lab):
 
-    Host PC
+    Host PC (workstation)
        |
-    Podman bridge network: poc_oracle_net
+       |  127.0.0.1:8080  -> kind extraPortMapping -> NodePort 30080 -> backend
+       |  127.0.0.1:1521  -> kind extraPortMapping -> NodePort 30152 -> oracle
        |
-       +-- backend (Spring Boot, external during Phase 1)
+    kind cluster (Podman provider), namespace `poc-oracle`
        |
-       +-- oracle (container poc-oracle, PDB_OLTP)
+       +-- backend (Spring Boot Deployment)
+       |      - connects to the DB via cluster DNS: oracle:1521/pdb_oltp
+       |      - readiness probe includes the `db` health group
+       |
+       +-- oracle (StatefulSet, gvenzl/oracle-free:23-slim, 1 replica)
+              - CDB FREE with PDB_OLTP (shared, VPD) and PDB_CORP
+                (dedicated, ENTERPRISE physical isolation)
+              - Oracle data persists on a PVC (survives pod restarts)
 
-The backend will communicate with Oracle over the internal Podman
-network. Oracle exposes ports 1521 (listener) and 8080 (HTTP) to the
-host for local development.
+Both host ports bind to loopback only: the lab is never reachable from
+the LAN (see `kind-config.yaml`, `listenAddress: 127.0.0.1`).
 
-This is the LOCAL lab. The enterprise architecture (RAC / ASM / Data
-Guard / GoldenGate) requires separate sites/nodes and is documented as
-target architecture (see SRS 86-87), not simulated on a single PC.
+NetworkPolicies (see `network-policies.yaml`) default-deny in the
+namespace with explicit allows for backend -> oracle:1521 and the
+NodePort paths used by workstation-side QA (Flyway, sqlplus, smoke).
+
+This is the LOCAL lab. The enterprise architecture (RAC / ASM) requires
+separate nodes and is documented as target architecture, not simulated
+on a single PC.

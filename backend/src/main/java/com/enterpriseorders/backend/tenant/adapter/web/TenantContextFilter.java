@@ -2,6 +2,7 @@ package com.enterpriseorders.backend.tenant.adapter.web;
 
 import com.enterpriseorders.backend.exception.BusinessException;
 import com.enterpriseorders.backend.tenant.port.input.ResolveTenantUseCase;
+import com.enterpriseorders.backend.tenant.model.TenantBO;
 import com.enterpriseorders.backend.tenant.port.output.TenantContextHolder;
 import com.enterpriseorders.backend.tenant.port.output.RoleTenancy;
 import com.enterpriseorders.backend.web.error.ApiError;
@@ -143,9 +144,9 @@ public class TenantContextFilter extends OncePerRequestFilter {
                 return;
             }
 
-            long tenantId;
+            TenantBO resolved;
             try {
-                tenantId = resolveTenantUseCase.resolveActiveTenantId(tenantCode);
+                resolved = resolveTenantUseCase.resolveActiveTenant(tenantCode);
             } catch (BusinessException e) {
                 log.warn("Unknown or inactive tenant (tenant={})", truncate(tenantCode));
                 writeError(request, response,
@@ -158,8 +159,11 @@ public class TenantContextFilter extends OncePerRequestFilter {
                 return;
             }
 
-            tenantContextHolder.setTenantId(tenantId);
-            MDC.put("tenantId", String.valueOf(tenantId));
+            // The tier comes from the resolved tenant row: it is the routing
+            // decision input (shared PDB vs dedicated PDB), not an inference.
+            tenantContextHolder.setTenantDetails(
+                    resolved.tenantId(), tenantCode, resolved.tier());
+            MDC.put("tenantId", String.valueOf(resolved.tenantId()));
             filterChain.doFilter(request, response);
         } finally {
             tenantContextHolder.clear();

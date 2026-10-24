@@ -2,45 +2,71 @@
 -- Oracle Local Lab - Initial Database Setup (first container start)
 --
 -- Executed by the gvenzl/oracle-free entrypoint as SYS against the FREE
--- CDB instance, AFTER database setup and ORACLE_DATABASE (PDB_OLTP)
--- creation. Scripts under /container-entrypoint-initdb.d are invoked
--- with NO substitution arguments, so passwords are DEFINE'd below.
+-- CDB instance. Creates:
+--   1. CDB-level settings (default file destination)
+--   2. Multitenant Physical Isolation:
+--      - PDB_OLTP : Shared PDB with VPD for STANDARD/PREMIUM tenants
+--      - PDB_CORP : Dedicated PDB for ENTERPRISE physical isolation
+--   3. Application schemas and tablespaces inside each PDB
 --
--- Creates the application schema users inside PDB_OLTP:
---
---   APP_OWNER     : owns schema objects (DDL for Flyway migrations)
---   APP_RUNTIME   : application execution (DML/SELECT, least privilege)
---   APP_REPORTING : read-only reporting user
---
--- Object grants (tables, MVs, sequences, packages) are NOT applied
--- here: the schema does not exist yet at first start (Flyway has not
--- run). Those grants are applied later by Flyway migration
--- V017__runtime_grants.sql and/or database/deploy_packages.sql.
---
--- LOCAL LAB ONLY: passwords hardcoded via DEFINE below. Production must
--- inject secrets (e.g. a wrapper .sh exporting env vars into sqlplus
--- substitution, or a secrets manager) - never commit real secrets.
---
--- NOTE: RAC/ASM/Data Guard/GoldenGate remain enterprise target
--- architecture (SRS §86-87, §112).
+-- NOTE: PDB_OLTP and PDB_CORP are provisioned with the SAME application
+-- schema (Flyway V001-V0xx + deploy_packages + seed) by `rake qa:db:init`,
+-- which runs every step against both services. This script only creates
+-- users, tablespaces and the PDBs themselves.
 --=====================================================================
 
 WHENEVER SQLERROR EXIT SQL.SQLCODE
 
--- Local-lab passwords (see header). Keep in sync with .env.example.
+-- Local-lab passwords. Keep in sync with .env.example.
 DEFINE app_owner_pwd     = LabOwnerPass1
 DEFINE app_runtime_pwd   = LabRuntimePass1
 DEFINE app_reporting_pwd = LabReportPass1
 
--- Init scripts connect to the FREE CDB root; application users must be
--- created inside PDB_OLTP (created because ORACLE_DATABASE=PDB_OLTP).
-ALTER SESSION SET CONTAINER = PDB_OLTP;
+--=====================================================================
+-- 1. CDB ROOT: Default file destination for PDB creation
+--=====================================================================
+ALTER SESSION SET CONTAINER = CDB$ROOT;
+
+BEGIN
+  EXECUTE IMMEDIATE 'ALTER SYSTEM SET db_create_file_dest=''/opt/oracle/oradata'' SCOPE=BOTH';
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END;
+/
 
 --=====================================================================
--- APP_OWNER : owns the application schema objects.
--- Used by Flyway migrations to run DDL.
--- Idempotent: skips creation if the user already exists (restarts).
+-- 2. CDB ROOT: Create the dedicated PDB for physical isolation
 --=====================================================================
+DECLARE
+  n NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO n FROM v$pdbs WHERE name = 'PDB_CORP';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE PLUGGABLE DATABASE pdb_corp ADMIN USER corp_admin IDENTIFIED BY "&app_owner_pwd" CREATE_FILE_DEST=''/opt/oracle/oradata''';
+    EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE pdb_corp OPEN';
+    EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE pdb_corp SAVE STATE';
+  END IF;
+END;
+/
+
+--=====================================================================
+-- 3. PDB_OLTP (Shared PDB with VPD + Tablespaces per Tenant)
+--=====================================================================
+ALTER SESSION SET CONTAINER = PDB_OLTP;
+
+-- Physical Tablespaces for tenant separation within the shared PDB
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE TABLESPACE ts_tenant_acme DATAFILE SIZE 20M AUTOEXTEND ON NEXT 10M MAXSIZE 200M';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE TABLESPACE ts_tenant_global DATAFILE SIZE 20M AUTOEXTEND ON NEXT 10M MAXSIZE 200M';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+
+-- APP_OWNER
 DECLARE
   n NUMBER;
 BEGIN
@@ -56,25 +82,67 @@ GRANT UNLIMITED TABLESPACE TO app_owner;
 GRANT CREATE TABLE, CREATE VIEW, CREATE PROCEDURE, CREATE SEQUENCE,
       CREATE TRIGGER, CREATE MATERIALIZED VIEW, CREATE SYNONYM
   TO app_owner;
--- Privileges required for multi-tenancy isolation (SRS 14, VPD/DBMS_RLS)
 GRANT EXECUTE ON SYS.DBMS_RLS TO app_owner;
 GRANT CREATE ANY CONTEXT TO app_owner;
--- Reporting MVs sit on VPD-protected master tables: Oracle forbids
--- DBMS_MVIEW.REFRESH there (ORA-30372) except for sessions holding
--- EXEMPT ACCESS POLICY. APP_OWNER holds it so the definer's-rights
--- refresh_reporting_views procedure (V018) can refresh; APP_RUNTIME
--- must NEVER hold it (it would bypass tenant isolation on all reads).
 GRANT EXEMPT ACCESS POLICY TO app_owner;
--- Object grants (tables/MVs/sequences) and package EXECUTE grants are
--- applied AFTER schema creation by Flyway migration
--- V017__runtime_grants.sql (and deploy_packages.sql for pkg_*).
+
+-- APP_RUNTIME
+DECLARE
+  n NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO n FROM all_users WHERE username = 'APP_RUNTIME';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE USER app_runtime IDENTIFIED BY "&app_runtime_pwd"';
+  END IF;
+END;
+/
+GRANT CREATE SESSION TO app_runtime;
+
+-- APP_REPORTING
+DECLARE
+  n NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO n FROM all_users WHERE username = 'APP_REPORTING';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE USER app_reporting IDENTIFIED BY "&app_reporting_pwd"';
+  END IF;
+END;
+/
+GRANT CREATE SESSION TO app_reporting;
 
 --=====================================================================
--- APP_RUNTIME : used by the Spring Boot application at runtime.
--- Least privilege: session only here; SELECT/DML/EXECUTE grants on
--- APP_OWNER objects come from V017__runtime_grants.sql after Flyway
--- has created the schema (ORA-00942 surfaces if objects are absent).
+-- 4. PDB_CORP (Dedicated PDB for Enterprise Physical Isolation)
 --=====================================================================
+ALTER SESSION SET CONTAINER = PDB_CORP;
+
+-- Dedicated Physical Tablespace
+BEGIN
+  EXECUTE IMMEDIATE 'CREATE TABLESPACE ts_corp_data DATAFILE SIZE 30M AUTOEXTEND ON NEXT 10M MAXSIZE 500M';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+
+-- APP_OWNER inside PDB_CORP
+DECLARE
+  n NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO n FROM all_users WHERE username = 'APP_OWNER';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE USER app_owner IDENTIFIED BY "&app_owner_pwd" DEFAULT TABLESPACE ts_corp_data';
+  END IF;
+END;
+/
+GRANT CONNECT, RESOURCE TO app_owner;
+GRANT CREATE SESSION TO app_owner;
+GRANT UNLIMITED TABLESPACE TO app_owner;
+GRANT CREATE TABLE, CREATE VIEW, CREATE PROCEDURE, CREATE SEQUENCE,
+      CREATE TRIGGER, CREATE MATERIALIZED VIEW, CREATE SYNONYM
+  TO app_owner;
+GRANT EXECUTE ON SYS.DBMS_RLS TO app_owner;
+GRANT CREATE ANY CONTEXT TO app_owner;
+GRANT EXEMPT ACCESS POLICY TO app_owner;
+
+-- APP_RUNTIME inside PDB_CORP
 DECLARE
   n NUMBER;
 BEGIN
@@ -87,16 +155,8 @@ END;
 GRANT CREATE SESSION TO app_runtime;
 
 --=====================================================================
--- APP_REPORTING : read-only reporting user (reporting workload).
--- SELECT grants on MVs/tables: V017__runtime_grants.sql.
+-- 5. Return to the default application PDB
 --=====================================================================
-DECLARE
-  n NUMBER;
-BEGIN
-  SELECT COUNT(*) INTO n FROM all_users WHERE username = 'APP_REPORTING';
-  IF n = 0 THEN
-    EXECUTE IMMEDIATE 'CREATE USER app_reporting IDENTIFIED BY "&app_reporting_pwd"';
-  END IF;
-END;
-/
-GRANT CREATE SESSION TO app_reporting;
+ALTER SESSION SET CONTAINER = PDB_OLTP;
+
+EXIT SUCCESS;

@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: oracle
-  namespace: poc-qa
+  namespace: poc-oracle
   labels:
     app: oracle
     app.kubernetes.io/part-of: enterprise-order-platform
@@ -36,7 +36,7 @@ spec:
             - name: ORACLE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: poc-qa-secrets
+                  name: poc-oracle-secrets
                   key: ORACLE_PASSWORD
             - name: ORACLE_DATABASE
               value: PDB_OLTP

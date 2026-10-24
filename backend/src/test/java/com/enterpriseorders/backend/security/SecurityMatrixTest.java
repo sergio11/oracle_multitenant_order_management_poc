@@ -123,7 +123,7 @@ class SecurityMatrixTest {
     @WithMockUser(username = "operator", roles = "ORDER_OPERATOR")
     void operatorWithAllowedTenantPasses() throws Exception {
         when(roleTenancy.isAllowed("ACME")).thenReturn(true);
-        when(resolveTenantUseCase.resolveActiveTenantId("ACME")).thenReturn(1L);
+        when(resolveTenantUseCase.resolveActiveTenant("ACME")).thenReturn(new TenantBO(1L, "ACME", "Acme Corp", "STANDARD", "ACTIVE", "SHARED_SCHEMA"));
         when(getOrderQuery.getOrder(1L)).thenReturn(
                 new OrderBO(1L, "ORD-001", 100L, "DRAFT", "USD", BigDecimal.ZERO, 0, List.of()));
         mockMvc.perform(get("/api/v1/orders/1")

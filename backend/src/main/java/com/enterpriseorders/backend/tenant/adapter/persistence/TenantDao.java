@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.sql.CallableStatement;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Optional;
@@ -25,10 +26,11 @@ public class TenantDao implements TenantRepository {
     }
 
     @Override
-    public Optional<Long> findActiveTenantIdByCode(String tenantCode) {
+    public Optional<TenantBO> findActiveByCode(String tenantCode) {
         return jdbcTemplate.query(
-                "SELECT tenant_id FROM tenant WHERE tenant_code = ? AND status = 'ACTIVE'",
-                rs -> rs.next() ? Optional.of(rs.getLong("tenant_id")) : Optional.empty(),
+                "SELECT tenant_id, tenant_code, name, tier, status, isolation_mode " +
+                "FROM tenant WHERE tenant_code = ? AND status = 'ACTIVE'",
+                rs -> rs.next() ? Optional.of(map(rs)) : Optional.empty(),
                 tenantCode
         );
     }
@@ -61,15 +63,19 @@ public class TenantDao implements TenantRepository {
                         throw new BusinessException("TENANT_NOT_FOUND",
                                 "Tenant not found: " + tenantId);
                     }
-                    return new TenantBO(
-                            rs.getLong("tenant_id"),
-                            rs.getString("tenant_code"),
-                            rs.getString("name"),
-                            rs.getString("tier"),
-                            rs.getString("status"),
-                            rs.getString("isolation_mode"));
+                    return map(rs);
                 },
                 tenantId);
+    }
+
+    private TenantBO map(ResultSet rs) throws SQLException {
+        return new TenantBO(
+                rs.getLong("tenant_id"),
+                rs.getString("tenant_code"),
+                rs.getString("name"),
+                rs.getString("tier"),
+                rs.getString("status"),
+                rs.getString("isolation_mode"));
     }
 
     private RuntimeException mapPlsqlError(SQLException ex) {

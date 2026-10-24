@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  namespace: poc-qa
+  namespace: poc-oracle
   labels:
     app: backend
     app.kubernetes.io/part-of: enterprise-order-platform
@@ -49,17 +49,17 @@ spec:
             - name: ORACLE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: poc-qa-secrets
+                  name: poc-oracle-secrets
                   key: APP_RUNTIME_PWD
             - name: APP_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: poc-qa-secrets
+                  name: poc-oracle-secrets
                   key: APP_ADMIN_PASSWORD
             - name: APP_OPERATOR_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: poc-qa-secrets
+                  name: poc-oracle-secrets
                   key: APP_OPERATOR_PASSWORD
           securityContext:
             allowPrivilegeEscalation: false

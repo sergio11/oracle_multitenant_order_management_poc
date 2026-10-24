@@ -41,8 +41,8 @@ BACKEND_DIR = File.join(ROOT, 'backend')
 ENV_FILE    = File.join(ROOT, 'infrastructure', 'podman', '.env')
 INIT_SQL    = File.join(ROOT, 'infrastructure', 'podman', 'scripts', '01-init-db.sql')
 
-CLUSTER_NAME = ENV.fetch('QA_CLUSTER', 'poc-qa')
-NAMESPACE    = ENV.fetch('QA_NAMESPACE', 'poc-qa')
+CLUSTER_NAME = ENV.fetch('QA_CLUSTER', 'poc-oracle')
+NAMESPACE    = ENV.fetch('QA_NAMESPACE', 'poc-oracle')
 # NOTE: keep the localhost/ prefix - it is the exact name podman stores
 # and kind/containerd looks up (imagePullPolicy: Never needs exact match).
 IMAGE        = ENV.fetch('QA_IMAGE', 'localhost/enterprise-orders-qa:0.0.1')
@@ -50,7 +50,13 @@ BACKEND_URL  = ENV.fetch('QA_BACKEND_URL', 'http://localhost:8080')
 ORACLE_HOST  = ENV.fetch('QA_ORACLE_HOST', 'localhost')
 ORACLE_PORT  = ENV.fetch('QA_ORACLE_PORT', '1521')
 ORACLE_SID   = ENV.fetch('QA_ORACLE_SERVICE', 'pdb_oltp')
-SECRETS_NAME = 'poc-qa-secrets'
+# Both application PDBs get the SAME Flyway schema, packages and seed, so
+# tenant_id values line up across them: ORACLE_SID (PDB_OLTP) is the shared
+# VPD PDB; DEDICATED_SID (PDB_CORP) is the dedicated PDB that serves
+# ENTERPRISE tenants. Everything that defines the schema runs on both.
+DEDICATED_SID      = ENV.fetch('QA_ORACLE_DEDICATED_SERVICE', 'pdb_corp')
+PROVISION_SERVICES = [ORACLE_SID, DEDICATED_SID].uniq.freeze
+SECRETS_NAME = 'poc-oracle-secrets'
 
 # LAB-ONLY defaults (documented demo credentials, never real secrets).
 # Fallback used only when infrastructure/podman/.env is absent (a warn
@@ -175,7 +181,7 @@ def ensure_secret!
     'APP_ADMIN_PASSWORD'    => env['APP_ADMIN_PASSWORD'],
     'APP_OPERATOR_PASSWORD' => env['APP_OPERATOR_PASSWORD']
   }
-  file = Tempfile.new(['poc-qa-secrets', '.env'])
+  file = Tempfile.new(['poc-oracle-secrets', '.env'])
   begin
     file.chmod(0o600)
     data.each { |k, v| file.write("#{k}=#{v}\n") }
@@ -288,9 +294,9 @@ def flyway_password
   pwd
 end
 
-def flyway_migrate!
-  url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
-  run!(mvn_cmd, '-q', 'flyway:migrate',
+def flyway_run!(goal, service: ORACLE_SID)
+  url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{service}"
+  run!(mvn_cmd, '-q', "flyway:#{goal}",
        "-Dflyway.url=#{url}",
        '-Dflyway.user=APP_OWNER',
        "-Dflyway.password=#{flyway_password}",
@@ -321,8 +327,11 @@ end
 # Pipe SQL text through the in-pod sqlplus, print output, fail loudly on
 # error exit codes AND on ORA-/SP2-/PLS- markers (sqlplus exit codes alone
 # are unreliable - a failed script can still exit 0). Returns stdout.
-def sql_via_pod!(stdin_text, user, pass, label)
-  conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
+# `service:` selects the connect service (CDB root uses FREE); `sysdba:`
+# appends the SYSDBA clause (SYS-only connections).
+def sql_via_pod!(stdin_text, user, pass, label, service: ORACLE_SID, sysdba: false)
+  conn = "#{user}/#{pass}@//localhost:1521/#{service}"
+  conn += ' as sysdba' if sysdba
   cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, oracle_pod!,
          '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)}"]
   puts "\n$ #{redact(cmd.join(' '))}  # via in-pod sqlplus (#{label})"
@@ -375,11 +384,11 @@ end
 # Run a SQL script as APP_OWNER against the Oracle NodePort using sqlplus.
 # Falls back to an in-pod sqlplus via kubectl exec when no local client exists.
 # Pass db_user:/db_password: to run as another schema user (e.g. APP_RUNTIME).
-def run_sql_as_owner!(script_path_or_stdin, label:, db_user: nil, db_password: nil)
+def run_sql_as_owner!(script_path_or_stdin, label:, db_user: nil, db_password: nil, service: ORACLE_SID)
   env = load_env_file
   user = db_user || env['APP_OWNER_USER']
   pass = db_password || env['APP_OWNER_PWD']
-  connect = "#{user}/#{pass}@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
+  connect = "#{user}/#{pass}@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{service}"
 
   # NOTE: sqlplus exit codes are unreliable (a failed script can still exit
   # 0), so every path below ALSO scans output for ORA-/SP2- errors.
@@ -396,6 +405,7 @@ def run_sql_as_owner!(script_path_or_stdin, label:, db_user: nil, db_password: n
     if script_path_or_stdin.is_a?(String) && File.exist?(script_path_or_stdin)
       out = capture!('sqlplus', '-L', '-S', connect, "@#{script_path_or_stdin}")
       check_output.call(out)
+      out
     else
       # Feed SQL on stdin to local sqlplus.
       puts "\n$ sqlplus -L -S <connect>  # stdin (#{label})"
@@ -407,6 +417,7 @@ def run_sql_as_owner!(script_path_or_stdin, label:, db_user: nil, db_password: n
       raise "SQL failed (#{label})" unless $CHILD_STATUS.success?
 
       check_output.call(out)
+      out
     end
   else
     # No local SQL*Plus: pipe through kubectl into the Oracle pod (has sqlplus).
@@ -422,11 +433,11 @@ def run_sql_as_owner!(script_path_or_stdin, label:, db_user: nil, db_password: n
       EXIT SUCCESS
     SQL
     # gvenzl image exposes sqlplus for OS-auth / app users (no NodePort needed).
-    sql_via_pod!(wrapper, user, pass, label)
+    sql_via_pod!(wrapper, user, pass, label, service: service)
   end
 end
 
-def run_packages_deploy!
+def run_packages_deploy!(service: ORACLE_SID)
   env = load_env_file
   user = env['APP_OWNER_USER']
   pass = env['APP_OWNER_PWD']
@@ -436,10 +447,10 @@ def run_packages_deploy!
 
   # deploy_packages.sql uses @@ relative includes - run from its directory.
   if sqlplus_available?
-    run!('sqlplus', '-L', '-S', "#{user}/#{pass}@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}",
+    run!('sqlplus', '-L', '-S', "#{user}/#{pass}@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{service}",
          "@#{deploy}", chdir: packages_dir)
   else
-    conn = "#{user}/#{pass}@//localhost:1521/#{ORACLE_SID}"
+    conn = "#{user}/#{pass}@//localhost:1521/#{service}"
     # NOTE: kubectl cp needs a POD name (statefulset/x is not accepted).
     pod = oracle_pod!
 
@@ -570,41 +581,42 @@ namespace :qa do
     desc 'Repair Flyway schema history (removes FAILED entries after fixing cause)'
     task :repair do
       ensure_cluster!
-      url = "jdbc:oracle:thin:@//#{ORACLE_HOST}:#{ORACLE_PORT}/#{ORACLE_SID}"
-      run!(mvn_cmd, '-q', 'flyway:repair',
-           "-Dflyway.url=#{url}",
-           '-Dflyway.user=APP_OWNER',
-           "-Dflyway.password=#{flyway_password}",
-           chdir: BACKEND_DIR)
-      puts 'Flyway repair OK.'
+      PROVISION_SERVICES.each do |service|
+        flyway_run!(:repair, service: service)
+        puts "Flyway repair OK (#{service})."
+      end
     end
 
-    desc 'Run Flyway migrations (V001-V026) against Oracle NodePort :1521'
+    desc 'Run Flyway migrations (V001-V026) on every provisioned PDB (shared + dedicated)'
     task :migrate do
       ensure_cluster!
       puts 'Waiting for Oracle before migrate...'
       wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
       puts
-      flyway_migrate!
-      puts 'Flyway migrate OK.'
+      PROVISION_SERVICES.each do |service|
+        flyway_run!(:migrate, service: service)
+        puts "Flyway migrate OK (#{service})."
+      end
     end
 
-    desc 'Deploy PL/SQL packages (specs then bodies) via deploy_packages.sql'
+    desc 'Deploy PL/SQL packages (specs then bodies) on every provisioned PDB'
     task :packages do
       ensure_cluster!
       wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
-      run_packages_deploy!
+      PROVISION_SERVICES.each { |service| run_packages_deploy!(service: service) }
       puts 'PL/SQL packages deployed.'
     end
 
-    desc 'Load repeatable seed data (R__seed_data.sql)'
+    desc 'Load repeatable seed data (R__seed_data.sql) on every provisioned PDB'
     task :seed do
       ensure_cluster!
       seed = File.join(ROOT, 'database', 'seed', 'R__seed_data.sql')
       abort "Missing #{seed}" unless File.exist?(seed)
 
       wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
-      run_sql_as_owner!(seed, label: 'seed')
+      PROVISION_SERVICES.each do |service|
+        run_sql_as_owner!(seed, label: "seed[#{service}]", service: service)
+      end
       puts 'Seed data loaded.'
     end
 
@@ -799,6 +811,20 @@ namespace :qa do
     desc 'verify-vpd + security + it (full DB verification)'
     task :verify => ['qa:db:verify-vpd', 'qa:db:security', 'qa:db:it'] do
       puts 'DB VERIFICATION PASSED (verify-vpd + security + it).'
+    end
+
+    namespace :rman do
+      desc 'Restore CDB + PDB_OLTP from RMAN pieces (requires ORACLE_SID + rman on PATH, unexecuted in lab)'
+      task :restore do
+        sid = ENV['ORACLE_SID'].to_s
+        abort 'ERROR: ORACLE_SID is not set.' if sid.empty?
+        abort 'ERROR: rman not found on PATH.' unless system('where rman >NUL 2>&1')
+        rcv = File.join(ROOT, 'database', 'backup', 'rman_restore_body.rcv')
+        abort "ERROR: #{rcv} missing." unless File.exist?(rcv)
+        puts "Pre-checks OK. SID=#{sid}. Starting restore..."
+        run!('rman', 'target', '/', "@#{rcv}")
+        puts 'RESTORE DONE. Open PDB_OLTP and verify with database/backup/backup_verify.sql.'
+      end
     end
   end
 
@@ -1017,12 +1043,155 @@ namespace :qa do
     end
   end
 
+  namespace :resilience do
+    desc 'R01: delete backend pod, assert recovery via /internal/health (SRS 117)'
+    task :backend_restart do
+      ensure_cluster!
+      pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE,
+                     '-l', 'app=backend', '-o',
+                     'jsonpath={.items[0].metadata.name}').strip
+      abort 'No backend pod found (is qa:deploy applied?)' if pod.empty?
+
+      restarts = capture!('kubectl', 'get', 'pod', pod, '-n', NAMESPACE,
+                          '-o', 'jsonpath={.status.containerStatuses[0].restartCount}').strip
+      puts "Deleting backend pod #{pod} (restartCount=#{restarts})..."
+      run!('kubectl', 'delete', 'pod', pod, '-n', NAMESPACE)
+
+      deadline = Time.now + 300
+      loop do
+        begin
+          res = http_get("#{BACKEND_URL}/internal/health")
+          break if res.code.to_i == 200
+        rescue StandardError
+          nil
+        end
+        abort 'Timeout waiting for backend recovery (300s)' if Time.now >= deadline
+        sleep 5
+        print '.'
+      end
+      puts "\nR01 PASSED: backend recovered via /internal/health"
+    end
+
+    desc 'R02: scale oracle to 0, assert controlled 503 + Unready-no-restart, recover (SRS 117 FT-001)'
+    task :db_outage do
+      ensure_cluster!
+      pod = capture!('kubectl', 'get', 'pods', '-n', NAMESPACE,
+                     '-l', 'app=backend', '-o',
+                     'jsonpath={.items[0].metadata.name}').strip
+      abort 'No backend pod found (is qa:deploy applied?)' if pod.empty?
+
+      before = capture!('kubectl', 'get', 'pod', pod, '-n', NAMESPACE,
+                        '-o', 'jsonpath={.status.containerStatuses[0].restartCount}').strip
+      puts "Scaling oracle statefulset to 0 (backend pod #{pod}, restartCount=#{before})..."
+      run!('kubectl', 'scale', 'statefulset', 'oracle', '-n', NAMESPACE, '--replicas=0')
+      begin
+        deadline = Time.now + 180
+        loop do
+          out = capture!('kubectl', 'get', 'statefulset', 'oracle', '-n', NAMESPACE,
+                         '-o', 'jsonpath={.status.readyReplicas}')
+          break if out.strip.empty? || out.strip == '0'
+          abort 'Timeout waiting for oracle to go down (180s)' if Time.now >= deadline
+          sleep 5
+          print '.'
+        end
+        puts
+
+        operator = [ENV.fetch('QA_OPERATOR_USER', 'operator'), load_env_file['APP_OPERATOR_PASSWORD']]
+        begin
+          res = http_post("#{BACKEND_URL}/api/v1/orders",
+                          '{"customerId":1,"currency":"USD"}',
+                          user: operator, headers: { 'X-Tenant-ID' => 'ACME' })
+          unless res.code.to_i == 503
+            abort "R02 FAILED: expected 503 during DB outage, got HTTP #{res.code} #{res.body}"
+          end
+          puts '  PASS  POST /orders -> 503 while DB down'
+        rescue StandardError => e
+          abort "R02 FAILED: request errored instead of controlled 503: #{e.message}"
+        end
+
+        ready = capture!('kubectl', 'get', 'pod', pod, '-n', NAMESPACE,
+                         '-o', 'jsonpath={.status.containerStatuses[0].ready}').strip
+        after = capture!('kubectl', 'get', 'pod', pod, '-n', NAMESPACE,
+                         '-o', 'jsonpath={.status.containerStatuses[0].restartCount}').strip
+        unless ready == 'false' && after == before
+          abort "R02 FAILED: expected Unready-no-restart (ready=#{ready.inspect}, " \
+                "restarts #{before}->#{after})"
+        end
+        puts '  PASS  backend Unready with no restart during outage'
+      ensure
+        puts 'Scaling oracle statefulset back to 1...'
+        run!('kubectl', 'scale', 'statefulset', 'oracle', '-n', NAMESPACE, '--replicas=1')
+      end
+
+      deadline = Time.now + 900
+      loop do
+        break if oracle_ready?
+        abort 'Timeout waiting for oracle to recover (900s)' if Time.now >= deadline
+        sleep 10
+        print '.'
+      end
+      puts
+      run_sql_as_owner!(File.join(ROOT, 'tests', 'resilience', 'R02_db_outage.sql'),
+                        label: 'R02-recovery-probe')
+      puts 'R02 PASSED: controlled 503, Unready-no-restart, recovery'
+    end
+  end
+
+  desc 'SRS 107: run P01-P06 performance workloads, assert Elapsed thresholds'
+  task :perf do
+    ensure_cluster!
+    env = load_env_file
+    thresholds = {
+      'P01_single_order_latency' => 2,
+      'P02_confirm_throughput'   => 5,
+      'P03_payment_mix'          => 5,
+      'P04_mv_query_latency'     => 5,
+      'P05_top_products_scan'    => 10,
+      'P06_mixed_read_write'     => 5
+    }
+    results_dir = File.join(ROOT, 'tests', 'performance', 'results')
+    FileUtils.mkdir_p(results_dir)
+    failures = []
+    runtime_user = env['APP_RUNTIME_USER'] || 'APP_RUNTIME'
+    runtime_pwd  = env['APP_RUNTIME_PWD'] || 'LabRuntimePass1'
+
+    thresholds.each do |name, threshold|
+      sql = File.join(ROOT, 'tests', 'performance', "#{name}.sql")
+      abort "Missing #{sql}" unless File.exist?(sql)
+      puts "\n== #{name} (threshold #{threshold}s) =="
+      out = begin
+        run_sql_as_owner!(sql, label: name, db_user: runtime_user,
+                                 db_password: runtime_pwd)
+      rescue StandardError => e
+        failures << name
+        puts "  FAIL  #{name} - #{e.message}"
+        next
+      end
+      File.write(File.join(results_dir, "#{name}.log"), out)
+      elapsed = out.to_s.scan(/Elapsed:\s*([0-9:.]+)/).flatten.map { |t|
+        t.split(':').inject(0) { |acc, part| acc * 60 + part.to_f }
+      }.max
+      if elapsed && elapsed <= threshold
+        puts "  PASS  #{name} - Elapsed #{elapsed.round(2)}s <= #{threshold}s"
+      else
+        failures << name
+        puts "  FAIL  #{name} - Elapsed #{elapsed.inspect}s > #{threshold}s"
+      end
+    end
+
+    if failures.empty?
+      puts "\nPERF OK (logs in tests/performance/results/)"
+    else
+      abort "PERF FAILED: #{failures.join(', ')}"
+    end
+  end
+
   desc 'Delete workloads + services (keeps cluster and Oracle PVC data)'
   task :down do
     next puts 'Cluster not present - nothing to tear down.' unless cluster_exists?
 
     run!('kubectl', 'delete', '-k', K8S_DIR, '--ignore-not-found=true')
-    # Namespace objects (secret/configmap) live in poc-qa - remove them too.
+    # Namespace objects (secret/configmap) live in poc-oracle - remove them too.
     run!('kubectl', 'delete', 'secret', SECRETS_NAME, '-n', NAMESPACE, '--ignore-not-found=true')
     run!('kubectl', 'delete', 'configmap', 'oracle-init-scripts', '-n', NAMESPACE,
          '--ignore-not-found=true')
@@ -1037,6 +1206,274 @@ namespace :qa do
 
   desc 'Full teardown: workloads then cluster'
   task :teardown => ['qa:down', 'qa:cluster:delete']
+end
+
+# =============================================================================
+# Multitenant Tasks
+# =============================================================================
+namespace :multitenant do
+  desc 'Verify physical PDB isolation (PDB_CORP vs PDB_OLTP)'
+  task :verify do
+    sql = <<~SQL
+      SET LINESIZE 120 PAGESIZE 50;
+      COLUMN name FORMAT A20;
+      COLUMN open_mode FORMAT A15;
+      SELECT con_id, name, open_mode FROM v$pdbs;
+      ALTER SESSION SET CONTAINER = PDB_CORP;
+      SELECT tablespace_name, status FROM user_tablespaces;
+    SQL
+    puts "\n--- Verifying Multitenant PDBs and Physical Tablespaces ---"
+    sql_via_pod!("#{sql}\nEXIT SUCCESS\n", 'sys', load_env_file['ORACLE_PASSWORD'],
+                 'multitenant-verify', service: 'FREE', sysdba: true)
+  end
+end
+
+
+namespace :e2e do
+  E2E_DIR = File.join(ROOT, 'tests', 'e2e')
+  # id => :pass/:fail, accumulated by run_e2e_test for e2e:all to aggregate.
+  $e2e_results = {}
+
+  # Stage tests/ in the Oracle pod once per rake invocation.
+  def sync_tests_to_pod!
+    return if @tests_synced
+
+    run!('kubectl', 'cp', 'tests', "#{NAMESPACE}/#{oracle_pod!}:/tmp/", chdir: ROOT)
+    @tests_synced = true
+  end
+
+  def sqlplus_in_pod(conn, script_name)
+    sync_tests_to_pod!
+    script = "/tmp/tests/e2e/#{script_name}"
+    cmd = ['kubectl', 'exec', '-i', '-n', NAMESPACE, oracle_pod!,
+           '--', 'bash', '-lc', "sqlplus -L -S #{Shellwords.escape(conn)} @#{script}"]
+    puts "\n$ #{redact(cmd.join(' '))}"
+    system(*cmd)
+    $?.exitstatus == 0
+  end
+
+  def run_e2e_test(id, name, conn, script_name)
+    puts "\n#{'─' * 70}"
+    puts "  RUNNING: [#{id}] #{name}"
+    puts "#{'─' * 70}"
+    ok = sqlplus_in_pod(conn, script_name)
+    puts ok ? "  ✅ PASSED" : "  ❌ FAILED"
+    result = ok ? :pass : :fail
+    $e2e_results[id] = result
+    result
+  end
+
+  def e2e_conn(user, pwd, pdb)
+    env = load_env_file
+    oracle_pwd = env['ORACLE_PASSWORD']
+    case user
+    when :sys  then "sys/#{oracle_pwd}@localhost:1521/FREE as sysdba"
+    when :runtime then "APP_RUNTIME/#{env['APP_RUNTIME_PWD'] || 'LabRuntimePass1'}@localhost:1521/pdb_oltp"
+    when :owner   then "APP_OWNER/#{env['APP_OWNER_PWD'] || 'LabOwnerPass1'}@localhost:1521/pdb_oltp"
+    end
+  end
+
+  desc 'E2E-01: Multitenant physical PDB isolation check (run as SYS)'
+  task :physical_isolation do
+    run_e2e_test('E01', 'Multitenant Physical Isolation', e2e_conn(:sys, nil, nil),
+                 'E01_physical_isolation.sql')
+  end
+
+  desc 'E2E-02: VPD fail-closed and cross-tenant isolation'
+  task :vpd_fail_closed do
+    run_e2e_test('E02', 'VPD Fail-Closed & Isolation', e2e_conn(:runtime, nil, nil), 'E02_vpd_fail_closed.sql')
+  end
+
+  desc 'E2E-03: Full PL/SQL order-to-payment business flow'
+  task :business_flow do
+    run_e2e_test('E03', 'PL/SQL Business Flow', e2e_conn(:runtime, nil, nil), 'E03_plsql_business_flow.sql')
+  end
+
+  desc 'E2E-04: Pessimistic locking and inventory consistency'
+  task :locking do
+    run_e2e_test('E04', 'Pessimistic Locking', e2e_conn(:runtime, nil, nil), 'E04_pessimistic_locking.sql')
+  end
+
+  desc 'E2E-05: Materialized view reporting consistency and VPD isolation'
+  task :mv_reporting do
+    run_e2e_test('E05', 'MV Reporting', e2e_conn(:runtime, nil, nil), 'E05_mv_reporting.sql')
+  end
+
+  desc 'E2E-06: Business rules and state machine validation'
+  task :business_rules do
+    run_e2e_test('E06', 'Business Rules / State Machine', e2e_conn(:runtime, nil, nil), 'E06_business_rules.sql')
+  end
+
+  namespace :api do
+    desc 'E2E-API: routing (INITECH -> PDB_CORP) - requires backend up'
+    task :physical_routing do
+      env = load_env_file
+      problems = []
+      check = lambda do |name, ok, detail = nil|
+        if ok
+          puts "  PASS  #{name}"
+        else
+          puts "  FAIL  #{name}#{detail ? " - #{detail}" : ''}"
+          problems << name
+        end
+      end
+
+      begin
+        res = http_get("#{BACKEND_URL}/internal/health")
+        unless res.code.to_i == 200
+          abort "e2e:api:physical_routing needs the backend at #{BACKEND_URL} (GET /internal/health -> HTTP #{res.code})"
+        end
+      rescue StandardError => e
+        abort "e2e:api:physical_routing needs the backend at #{BACKEND_URL} (#{e.message})"
+      end
+
+      # 1) Marker order that exists ONLY in the shared PDB (PDB_OLTP).
+      #    VPD is fail-closed for APP_OWNER too, so every statement below
+      #    opens with pkg_tenant.set_tenant_context.
+      seed_out = run_sql_as_owner!(<<~SQL, label: 'api-routing-seed', service: ORACLE_SID)
+        SET SERVEROUTPUT ON HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 200
+        DECLARE
+          v_tenant   NUMBER;
+          v_customer NUMBER;
+          v_order    NUMBER;
+        BEGIN
+          SELECT tenant_id, customer_id
+            INTO v_tenant, v_customer
+            FROM tenant t
+            JOIN customer c ON c.tenant_id = t.tenant_id
+           WHERE t.tenant_code = 'INITECH'
+             AND c.customer_number = 'C0001';
+          pkg_tenant.set_tenant_context(v_tenant);
+          DELETE FROM order_status_history
+           WHERE order_id IN (SELECT order_id FROM sales_order
+                               WHERE order_number = 'E2E-ROUTING-0001');
+          DELETE FROM sales_order WHERE order_number = 'E2E-ROUTING-0001';
+          INSERT INTO sales_order (tenant_id, order_number, customer_id,
+                                   status, currency, total_amount)
+          VALUES (v_tenant, 'E2E-ROUTING-0001', v_customer, 'DRAFT', 'USD', 0)
+          RETURNING order_id INTO v_order;
+          COMMIT;
+          DBMS_OUTPUT.PUT_LINE('SEED ' || v_order || ' ' || v_customer);
+        END;
+        /
+        EXIT SUCCESS
+      SQL
+      marker_id  = seed_out.to_s[/SEED\s+(\d+)\s+(\d+)/, 1]
+      customer_id = seed_out.to_s[/SEED\s+(\d+)\s+(\d+)/, 2]
+      check.call('marker order seeded in shared PDB', !marker_id.nil?,
+                 "no SEED line in output")
+
+      begin
+      admin = [ENV.fetch('QA_ADMIN_USER', 'admin'), env['APP_ADMIN_PASSWORD']]
+
+      # 2) The shared-only marker must be invisible via the API (404).
+      #    A 200 here means the request was routed to PDB_OLTP.
+      if marker_id
+        begin
+          res = http_get("#{BACKEND_URL}/api/v1/orders/#{marker_id}", user: admin,
+                         headers: { 'X-Tenant-ID' => 'INITECH' })
+          check.call('shared-only marker invisible via API (404)',
+                     res.code.to_i == 404, "HTTP #{res.code}")
+        rescue StandardError => e
+          check.call('shared-only marker invisible via API (404)', false, e.message)
+        end
+      end
+
+      # 3) A real INITECH order must land in the dedicated PDB (PDB_CORP).
+      order_id = nil
+      begin
+        res = http_post("#{BACKEND_URL}/api/v1/orders",
+                        { customerId: customer_id.to_i, currency: 'USD' }.to_json,
+                        user: admin,
+                        headers: { 'X-Tenant-ID' => 'INITECH' })
+        check.call('POST /orders (INITECH) -> 201', res.code.to_i == 201,
+                   "HTTP #{res.code} #{res.body.to_s[0, 120]}")
+        order_id = JSON.parse(res.body)['orderId'] if res.code.to_i == 201
+      rescue StandardError => e
+        check.call('POST /orders (INITECH) -> 201', false, e.message)
+      end
+
+      # 4) Physical placement: created order in PDB_CORP, not in PDB_OLTP.
+      if order_id
+        [[DEDICATED_SID, 1], [ORACLE_SID, 0]].each do |service, expected|
+          out = run_sql_as_owner!(<<~SQL, label: "api-routing-placement-#{service}", service: service)
+            SET SERVEROUTPUT ON HEADING OFF FEEDBACK OFF PAGESIZE 0
+            DECLARE
+              v_tenant NUMBER;
+              v_count  NUMBER;
+            BEGIN
+              SELECT tenant_id INTO v_tenant FROM tenant WHERE tenant_code = 'INITECH';
+              pkg_tenant.set_tenant_context(v_tenant);
+              SELECT COUNT(*) INTO v_count FROM sales_order WHERE order_id = #{order_id.to_i};
+              DBMS_OUTPUT.PUT_LINE('FOUND ' || v_count);
+            END;
+            /
+            EXIT SUCCESS
+          SQL
+          found = out.to_s[/FOUND\s+(\d+)/, 1].to_i
+          check.call("order #{order_id} in #{service} (expected #{expected})",
+                     found == expected, "found #{found}")
+        end
+      end
+
+      result = problems.empty? ? :pass : :fail
+      $e2e_results['API-ROUTING'] = result
+      abort "e2e:api:physical_routing failed: #{problems.join('; ')}" unless problems.empty?
+      ensure
+      # Always remove the marker and any API-created order, even when an
+      # HTTP assertion or a database placement query fails.
+      [[ORACLE_SID, (marker_id || -1).to_i], [DEDICATED_SID, (order_id || -1).to_i]].each do |service, oid|
+        begin
+          run_sql_as_owner!(<<~SQL, label: "api-routing-cleanup-#{service}", service: service)
+            SET HEADING OFF FEEDBACK OFF PAGESIZE 0
+            DECLARE
+              v_tenant NUMBER;
+            BEGIN
+              SELECT tenant_id INTO v_tenant FROM tenant WHERE tenant_code = 'INITECH';
+              pkg_tenant.set_tenant_context(v_tenant);
+              DELETE FROM order_status_history
+               WHERE order_id IN (SELECT order_id FROM sales_order
+                                   WHERE order_number = 'E2E-ROUTING-0001')
+                  OR order_id = #{oid};
+              DELETE FROM sales_order
+               WHERE order_number = 'E2E-ROUTING-0001'
+                  OR order_id = #{oid};
+              COMMIT;
+            END;
+            /
+            EXIT SUCCESS
+          SQL
+        rescue StandardError => e
+          warn "WARNING: cleanup on #{service} failed: #{e.message}"
+        end
+      end
+      end
+    end
+  end
+
+  desc 'Run the full E2E suite (DB + API) - aborts if any test fails'
+  task :all => [
+    'e2e:physical_isolation',
+    'e2e:vpd_fail_closed',
+    'e2e:business_flow',
+    'e2e:locking',
+    'e2e:mv_reporting',
+    'e2e:business_rules',
+    'e2e:api:physical_routing'
+  ] do
+    passed  = $e2e_results.count { |_, v| v == :pass }
+    failed  = $e2e_results.select { |_, v| v == :fail }.keys
+    puts "\n#{'═' * 70}"
+    if failed.empty? && passed == $e2e_results.size && !passed.zero?
+      puts "  ✅ E2E suite: #{passed}/#{$e2e_results.size} passed."
+      puts "#{'═' * 70}"
+    else
+      puts "  ❌ E2E suite: #{passed} passed, #{failed.size} failed" \
+           "#{failed.empty? ? '' : " (#{failed.join(', ')})"}."
+      puts "#{'═' * 70}"
+      abort 'E2E suite failed'
+    end
+  end
 end
 
 desc 'List all tasks'

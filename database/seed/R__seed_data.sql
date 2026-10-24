@@ -23,11 +23,20 @@
 
 --=====================================================================
 -- TENANTS (no VPD policy on TENANT - safe without context)
+--
+-- The tenancy rows MUST get identical tenant_id values in every
+-- provisioned PDB (the shared PDB resolves the tenant, the dedicated
+-- PDB consumes that same id as the VPD/FK reference). Oracle is free to
+-- order a UNION ALL subquery arbitrarily, so the seed pins the order:
+-- with a stable order the identity sequence assigns the same ids in
+-- PDB_OLTP and PDB_CORP.
 --=====================================================================
 MERGE INTO tenant t
-USING (SELECT 'ACME'    AS code, 'Acme Corporation'  AS name, 'STANDARD'  AS tier FROM dual
-       UNION ALL SELECT 'GLOBEX',  'Globex Inc',  'PREMIUM'    AS tier FROM dual
-       UNION ALL SELECT 'INITECH', 'Initech Ltd', 'ENTERPRISE' AS tier FROM dual) s
+USING (SELECT code, name, tier
+       FROM (SELECT 'ACME'    AS code, 'Acme Corporation'  AS name, 'STANDARD'  AS tier FROM dual
+             UNION ALL SELECT 'GLOBEX',  'Globex Inc',  'PREMIUM'    AS tier FROM dual
+             UNION ALL SELECT 'INITECH', 'Initech Ltd', 'ENTERPRISE' AS tier FROM dual)
+       ORDER BY code) s
 ON (t.tenant_code = s.code)
 WHEN NOT MATCHED THEN
     INSERT (tenant_code, name, tier, status, isolation_mode)

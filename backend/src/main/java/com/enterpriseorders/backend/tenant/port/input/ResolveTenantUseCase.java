@@ -1,5 +1,7 @@
 package com.enterpriseorders.backend.tenant.port.input;
 
+import com.enterpriseorders.backend.tenant.model.TenantBO;
+
 /**
  * Input port for tenant resolution from the web layer (H4).
  *
@@ -9,9 +11,10 @@ package com.enterpriseorders.backend.tenant.port.input;
 public interface ResolveTenantUseCase {
 
     /**
-     * @return the id of the ACTIVE tenant for the given code
+     * @return the ACTIVE tenant (id, code, tier) for the given code; the
+     *         tier drives DataSource routing (shared vs dedicated PDB)
      * @throws com.enterpriseorders.backend.exception.BusinessException with
      *         code {@code TENANT_NOT_FOUND} when the code is unknown or inactive
      */
-    long resolveActiveTenantId(String tenantCode);
+    TenantBO resolveActiveTenant(String tenantCode);
 }

@@ -10,6 +10,9 @@ spring:
 
 oracle:
   url: ${ORACLE_URL}
+  # Require an explicit second service so enterprise tenants cannot
+  # silently fall back to the shared PDB and bypass physical isolation.
+  dedicated-url: ${ORACLE_DEDICATED_URL}
   username: ${ORACLE_USER}
   password: ${ORACLE_PASSWORD}
   ucp:

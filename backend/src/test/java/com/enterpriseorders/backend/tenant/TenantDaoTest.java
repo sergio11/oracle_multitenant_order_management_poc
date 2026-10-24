@@ -32,30 +32,36 @@ class TenantDaoTest {
     @InjectMocks private TenantDao tenantDao;
 
     @Test
-    void shouldFindActiveTenantIdByCode() {
-        when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq("ACME")))
+    void shouldFindActiveTenantByCodeIncludingTier() {
+        when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq("INITECH")))
             .thenAnswer(inv -> {
-                ResultSetExtractor<Optional<Long>> extractor = inv.getArgument(1);
+                ResultSetExtractor<Optional<TenantBO>> extractor = inv.getArgument(1);
                 var rs = mock(java.sql.ResultSet.class);
                 when(rs.next()).thenReturn(true);
-                when(rs.getLong("tenant_id")).thenReturn(1L);
+                when(rs.getLong("tenant_id")).thenReturn(3L);
+                when(rs.getString("tenant_code")).thenReturn("INITECH");
+                when(rs.getString("name")).thenReturn("Initech");
+                when(rs.getString("tier")).thenReturn("ENTERPRISE");
+                when(rs.getString("status")).thenReturn("ACTIVE");
+                when(rs.getString("isolation_mode")).thenReturn("SHARED_SCHEMA");
                 return extractor.extractData(rs);
             });
-        Optional<Long> result = tenantDao.findActiveTenantIdByCode("ACME");
+        Optional<TenantBO> result = tenantDao.findActiveByCode("INITECH");
         assertTrue(result.isPresent());
-        assertEquals(1L, result.get());
+        assertEquals(3L, result.get().tenantId());
+        assertEquals("ENTERPRISE", result.get().tier());
     }
 
     @Test
     void shouldReturnEmptyWhenTenantCodeNotFound() {
         when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq("UNKNOWN")))
             .thenAnswer(inv -> {
-                ResultSetExtractor<Optional<Long>> extractor = inv.getArgument(1);
+                ResultSetExtractor<Optional<TenantBO>> extractor = inv.getArgument(1);
                 var rs = mock(java.sql.ResultSet.class);
                 when(rs.next()).thenReturn(false);
                 return extractor.extractData(rs);
             });
-        Optional<Long> result = tenantDao.findActiveTenantIdByCode("UNKNOWN");
+        Optional<TenantBO> result = tenantDao.findActiveByCode("UNKNOWN");
         assertFalse(result.isPresent());
     }
 
