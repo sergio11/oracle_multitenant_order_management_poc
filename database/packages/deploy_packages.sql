@@ -17,6 +17,7 @@
 -- Abort on the first SQL error so failures are not masked by later
 -- PROMPTs (SQL*Plus default is to continue).
 WHENEVER SQLERROR EXIT SQL.SQLCODE
+SET DEFINE OFF
 
 -- Application context used by VPD and tenant isolation (SRS 14)
 CREATE OR REPLACE CONTEXT app_ctx USING app_owner.pkg_tenant;
