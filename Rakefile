@@ -464,6 +464,9 @@ def run_packages_deploy!(service: ORACLE_SID)
       cd /tmp/packages
       sqlplus -L -S #{Shellwords.escape(conn)} @deploy_packages.sql
     SH
+    # Rakefile may be checked out with CRLF on Windows; bash treats the
+    # trailing carriage return in `set -o pipefail\r` as an invalid option.
+    script = script.gsub("\r\n", "\n")
     run!('kubectl', 'exec', '-i', '-n', NAMESPACE, pod, '--', 'bash', '-lc', script)
   end
 end
