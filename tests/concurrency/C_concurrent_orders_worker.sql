@@ -7,11 +7,10 @@
 -- INSUFFICIENT_INVENTORY when stock qty=1).
 --
 -- Designed to be launched N times in parallel by:
---   tests/concurrency/run_concurrency_test.bat
---   (via tests/concurrency/C_worker_runner.bat)
+--   rake qa:db:concurrency
 --
 -- Args (via DEFINE substitution, ORDER MATTERS - keep in sync with
--- C_worker_runner.bat / run_concurrency_test.bat):
+-- Rake task qa:db:concurrency):
 --   &1 p_worker_id
 --   &2 p_tenant_id
 --   &3 p_customer_id

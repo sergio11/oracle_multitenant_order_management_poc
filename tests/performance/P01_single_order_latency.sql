@@ -1,6 +1,6 @@
 -- P01 — single-order create latency (SRS §107 "single request").
 -- Purpose: baseline latency of one order header insert path.
--- SLO: collected by run_performance.bat (default threshold 500ms p-statement).
+-- SLO: collected by rake qa:perf (thresholds are defined in the Rakefile).
 -- Resolves tenant by code (never hardcoded IDs).
 SET TIMING ON
 VARIABLE v_tenant NUMBER;

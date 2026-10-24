@@ -1,5 +1,5 @@
 -- R02_db_outage.sql — probe queries used during the outage window.
--- Run via R02_db_outage.bat. Expects: reads succeed/fail-closed per VPD only
+-- Run via rake qa:resilience:db_outage. Expects: reads succeed/fail-closed per VPD only
 -- when the DB is UP; when DOWN the app (not this script) returns 503 JSON.
 -- This script simply proves the DB is reachable again after recovery.
 WHENEVER SQLERROR EXIT FAILURE

@@ -1,5 +1,5 @@
--- rman_restore_body.rcv — called by rman_restore.bat (kept separate so
--- the .bat holds pre-checks and this file holds pure RMAN syntax).
+-- rman_restore_body.rcv — invoked by `rake qa:rman:restore`.
+-- This file contains RMAN syntax; the Rake task checks prerequisites first.
 STARTUP FORCE NOMOUNT;
 RESTORE CONTROLFILE FROM AUTOBACKUP;
 ALTER DATABASE MOUNT;
