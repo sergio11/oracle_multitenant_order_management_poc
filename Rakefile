@@ -459,11 +459,10 @@ def run_packages_deploy!(service: ORACLE_SID)
     Dir.children(packages_dir).select { |f| f.end_with?('.sql') }.each do |f|
       cp_to_pod!(File.join(packages_dir, f), "/tmp/packages/#{f}")
     end
-    # Keep the remote bash command on one line; a multiline Ruby string can
-    # carry Windows CRLF through kubectl exec into `bash -lc`.
-    script = ['set -euo pipefail', 'cd /tmp/packages',
-              "sqlplus -L -S #{Shellwords.escape(conn)} @deploy_packages.sql"].join(' && ')
-    run!('kubectl', 'exec', '-i', '-n', NAMESPACE, pod, '--', 'bash', '-lc', script)
+    # Invoke SQL*Plus directly with an absolute script path. This avoids
+    # shell quoting/line-ending differences between Windows and the pod.
+    run!('kubectl', 'exec', '-n', NAMESPACE, pod, '--', 'sqlplus', '-L', '-S',
+         conn, '@/tmp/packages/deploy_packages.sql')
   end
 end
 
