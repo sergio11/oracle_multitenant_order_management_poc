@@ -95,7 +95,7 @@ BEGIN
     RAISE_APPLICATION_ERROR(-20112, 'FAIL: pkg_tenant body missing in PDB_OLTP');
   END IF;
 
-  SELECT COUNT(*) INTO v_pol FROM all_policies WHERE owner = 'APP_OWNER';
+  SELECT COUNT(*) INTO v_pol FROM all_policies WHERE object_owner = 'APP_OWNER';
   IF v_pol = 0 THEN
     RAISE_APPLICATION_ERROR(-20113, 'FAIL: no VPD policies in PDB_OLTP');
   END IF;
@@ -167,7 +167,7 @@ BEGIN
     RAISE_APPLICATION_ERROR(-20123, 'FAIL: pkg_tenant body missing in PDB_CORP');
   END IF;
 
-  SELECT COUNT(*) INTO v_pol FROM all_policies WHERE owner = 'APP_OWNER';
+  SELECT COUNT(*) INTO v_pol FROM all_policies WHERE object_owner = 'APP_OWNER';
   IF v_pol = 0 THEN
     RAISE_APPLICATION_ERROR(-20124, 'FAIL: no VPD policies in PDB_CORP');
   END IF;

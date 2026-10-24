@@ -1289,7 +1289,7 @@ namespace :e2e do
 
   desc 'E2E-04: Pessimistic locking and inventory consistency'
   task :locking do
-    run_e2e_test('E04', 'Pessimistic Locking', e2e_conn(:runtime, nil, nil), 'E04_pessimistic_locking.sql')
+    run_e2e_test('E04', 'Pessimistic Locking', e2e_conn(:owner, nil, nil), 'E04_pessimistic_locking.sql')
   end
 
   desc 'E2E-05: Materialized view reporting consistency and VPD isolation'
@@ -1335,7 +1335,7 @@ namespace :e2e do
           v_customer NUMBER;
           v_order    NUMBER;
         BEGIN
-          SELECT tenant_id, customer_id
+          SELECT t.tenant_id, c.customer_id
             INTO v_tenant, v_customer
             FROM tenant t
             JOIN customer c ON c.tenant_id = t.tenant_id

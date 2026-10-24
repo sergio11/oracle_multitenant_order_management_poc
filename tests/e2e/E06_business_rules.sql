@@ -110,22 +110,17 @@ BEGIN
 END;
 /
 
--- Test 4: Cancel a CONFIRMED order -> must fail (no undo after confirm)
+-- Test 4: Cancel a CONFIRMED order -> valid and releases reserved inventory
 DECLARE
-  v_raised BOOLEAN := FALSE;
+  v_status VARCHAR2(30);
 BEGIN
   pkg_tenant.set_tenant_context(:v_tid);
-  BEGIN
-    pkg_order_management.cancel_order(:v_tid, :v_oid, 'E2E_RULE', 'CANCEL2-' || SYS_GUID());
-  EXCEPTION WHEN OTHERS THEN
-    v_raised := TRUE;
-    DBMS_OUTPUT.PUT_LINE('[INFO] cancel_order on CONFIRMED raised: ' || SQLERRM);
-  END;
-  IF NOT v_raised THEN
-    DBMS_OUTPUT.PUT_LINE('[WARN] cancel_order on CONFIRMED did not raise (check state machine rules)');
-  ELSE
-    DBMS_OUTPUT.PUT_LINE('[PASS] cancel_order correctly rejected on CONFIRMED order');
+  pkg_order_management.cancel_order(:v_tid, :v_oid, 'E2E_RULE', 'CANCEL2-' || SYS_GUID());
+  SELECT status INTO v_status FROM sales_order WHERE order_id = :v_oid AND tenant_id = :v_tid;
+  IF v_status != 'CANCELLED' THEN
+    RAISE_APPLICATION_ERROR(-20073, 'FAIL: Cancel CONFIRMED -> expected CANCELLED, got ' || v_status);
   END IF;
+  DBMS_OUTPUT.PUT_LINE('[PASS] CONFIRMED -> CANCELLED transition releases inventory');
 END;
 /
 
