@@ -459,14 +459,10 @@ def run_packages_deploy!(service: ORACLE_SID)
     Dir.children(packages_dir).select { |f| f.end_with?('.sql') }.each do |f|
       cp_to_pod!(File.join(packages_dir, f), "/tmp/packages/#{f}")
     end
-    script = <<~SH
-      set -euo pipefail
-      cd /tmp/packages
-      sqlplus -L -S #{Shellwords.escape(conn)} @deploy_packages.sql
-    SH
-    # Rakefile may be checked out with CRLF on Windows; bash treats the
-    # trailing carriage return in `set -o pipefail\r` as an invalid option.
-    script = script.gsub("\r\n", "\n")
+    # Keep the remote bash command on one line; a multiline Ruby string can
+    # carry Windows CRLF through kubectl exec into `bash -lc`.
+    script = ['set -euo pipefail', 'cd /tmp/packages',
+              "sqlplus -L -S #{Shellwords.escape(conn)} @deploy_packages.sql"].join(' && ')
     run!('kubectl', 'exec', '-i', '-n', NAMESPACE, pod, '--', 'bash', '-lc', script)
   end
 end
