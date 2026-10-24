@@ -1294,7 +1294,31 @@ namespace :e2e do
 
   desc 'E2E-05: Materialized view reporting consistency and VPD isolation'
   task :mv_reporting do
-    run_e2e_test('E05', 'MV Reporting', e2e_conn(:owner, nil, nil), 'E05_mv_reporting.sql')
+    run_e2e_test('E05', 'MV Reporting', e2e_conn(:runtime, nil, nil), 'E05_mv_reporting.sql')
+    run_sql_as_owner!(<<~SQL, label: 'e2e-mv-cleanup', service: ORACLE_SID)
+      SET SERVEROUTPUT ON
+      DECLARE
+        v_tenant NUMBER;
+      BEGIN
+        SELECT tenant_id INTO v_tenant FROM tenant WHERE tenant_code = 'ACME';
+        pkg_tenant.set_tenant_context(v_tenant);
+        FOR r IN (SELECT order_id FROM payment
+                   WHERE tenant_id = v_tenant
+                     AND payment_reference LIKE 'PAY-MV-%') LOOP
+          DELETE FROM payment WHERE tenant_id = v_tenant AND order_id = r.order_id;
+          DELETE FROM order_status_history WHERE tenant_id = v_tenant AND order_id = r.order_id;
+          DELETE FROM sales_order_line WHERE tenant_id = v_tenant AND order_id = r.order_id;
+          DELETE FROM outbox_event WHERE tenant_id = v_tenant AND aggregate_id = TO_CHAR(r.order_id);
+          DELETE FROM audit_event WHERE tenant_id = v_tenant AND entity_id = TO_CHAR(r.order_id);
+          DELETE FROM sales_order WHERE tenant_id = v_tenant AND order_id = r.order_id;
+        END LOOP;
+        COMMIT;
+        pkg_tenant.clear_tenant_context;
+        refresh_reporting_views;
+      END;
+      /
+      EXIT SUCCESS
+    SQL
   end
 
   desc 'E2E-06: Business rules and state machine validation'

@@ -127,6 +127,7 @@ END;
 -- Cleanup
 BEGIN
   pkg_tenant.set_tenant_context(:v_tid);
+  EXECUTE IMMEDIATE 'DELETE FROM payment WHERE tenant_id=:1 AND order_id=:2' USING :v_tid, :v_oid;
   EXECUTE IMMEDIATE 'DELETE FROM order_status_history WHERE tenant_id=:1 AND order_id=:2' USING :v_tid, :v_oid;
   EXECUTE IMMEDIATE 'DELETE FROM sales_order_line WHERE tenant_id=:1 AND order_id=:2' USING :v_tid, :v_oid;
   EXECUTE IMMEDIATE 'DELETE FROM outbox_event WHERE tenant_id=:1 AND aggregate_id=:2' USING :v_tid, TO_CHAR(:v_oid);
