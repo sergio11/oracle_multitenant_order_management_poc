@@ -154,6 +154,18 @@ END;
 /
 GRANT CREATE SESSION TO app_runtime;
 
+-- APP_REPORTING inside PDB_CORP (Flyway grants it report access here too)
+DECLARE
+  n NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO n FROM all_users WHERE username = 'APP_REPORTING';
+  IF n = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE USER app_reporting IDENTIFIED BY "&app_reporting_pwd"';
+  END IF;
+END;
+/
+GRANT CREATE SESSION TO app_reporting;
+
 --=====================================================================
 -- 5. Return to the default application PDB
 --=====================================================================
