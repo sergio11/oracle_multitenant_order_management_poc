@@ -1,6 +1,6 @@
 <div align="center">
 
-# Resilient Enterprise Architecture on Oracle 23c: Zero Downtime, Active-Active Clustering & Disaster Recovery
+# Multi-Tenant Order Management on Oracle Database 23c
 
 **🗃️ Multi-Tenancy · 🔷 Hexagonal Architecture · ⚡ PL/SQL · 🔒 VPD · 🔄 Idempotency · 📦 Transactional Outbox**
 
@@ -44,7 +44,9 @@ graph TB
 
     subgraph Oracle["🗄️ Oracle Database 23c"]
         direction TB
-        PDB["📦 PDB_OLTP"]
+        Routing["Tenant tier routing<br/>STANDARD → PDB_OLTP<br/>ENTERPRISE → PDB_CORP"]
+        PDB["📦 PDB_OLTP (shared / VPD)"]
+        CorpPDB["📦 PDB_CORP (dedicated tier)"]
         VPD["🔒 VPD / DBMS_RLS<br/>16 tenant-aware objects"]
         PLSQL["⚡ PL/SQL Packages<br/>pkg_order_mgmt · pkg_inventory<br/>pkg_audit · pkg_tenant"]
         MV["📊 Materialized Views<br/>mv_order_daily<br/>mv_product_sales"]
@@ -56,7 +58,9 @@ graph TB
     TenantFilter --> Controllers
     Controllers --> Services
     Services --> Adapters
-    Adapters -->|"JDBC / UCP"| PDB
+    Adapters --> Routing
+    Routing --> PDB
+    Routing --> CorpPDB
     PDB --> VPD
     PDB --> PLSQL
     PDB --> MV
@@ -64,7 +68,9 @@ graph TB
 
 > 🛡️ **Actual filter order**: Spring Security's filter chain runs at order `-100`, i.e. **before** the correlation (order `0`) and tenant (order `10`) servlet filters set in `FilterOrderConfig`. Requests are authenticated first, then correlation/tenant context is established.
 
-## 🏢 Enterprise Target Architecture
+## 🏢 Enterprise Architecture Context
+
+The local POC implements the single-node kind topology above. RAC, ASM, and disaster recovery are outside this repository's executable scope; Oracle GoldenGate and Data Guard are not included.
 
 ```mermaid
 graph TB
@@ -82,14 +88,6 @@ graph TB
             ASM["💾 ASM<br/>Storage Management"]
         end
 
-        subgraph DR["🛡️ Disaster Recovery"]
-            DG["🔒 Data Guard<br/>Standby Database"]
-        end
-
-        subgraph Replication["🔄 Replication"]
-            GG["GoldenGate<br/>Logical Replication"]
-        end
-
         subgraph Reporting["📊 Reporting"]
             MV_RPT["Materialized Views"]
             Analytics["📈 Analytics Dashboard"]
@@ -98,17 +96,13 @@ graph TB
         LB --> AppTier
         AppTier -->|"JDBC/UCP"| RAC
         RAC --> ASM
-        RAC -->|"Redo Transport"| DG
-        DG -->|"Archive Log"| GG
-        GG --> MV_RPT
+        RAC -->|"MV Refresh"| MV_RPT
         MV_RPT --> Analytics
     end
 
     style Enterprise fill:#1a1a2e,stroke:#e94560,color:#fff
     style AppTier fill:#16213e,stroke:#0f3460,color:#fff
     style DBTier fill:#16213e,stroke:#0f3460,color:#fff
-    style DR fill:#16213e,stroke:#0f3460,color:#fff
-    style Replication fill:#16213e,stroke:#0f3460,color:#fff
     style Reporting fill:#16213e,stroke:#0f3460,color:#fff
 ```
 
@@ -160,10 +154,9 @@ Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inven
 |---|---|
 | 📡 **No JPA/Hibernate** | Explicit JDBC requires more boilerplate but provides full SQL control. Tradeoff: developer productivity vs. transparency. |
 | 🗄️ **PL/SQL business logic** | Database-centric logic is harder to version control and test locally. Mitigated by Flyway migrations and SQL-based tests. |
-| 🖥️ **Single-instance Oracle Free** | No RAC, ASM, or Data Guard locally. Enterprise architecture is documented but not simulated. |
+| 🖥️ **Single-instance Oracle Free** | No RAC or ASM locally. Enterprise architecture is documented but not simulated. |
 | 🔑 **In-memory credentials** | Spring Security uses `InMemoryUserDetailsManager`. A production setup would use LDAP/OAuth2. |
 | 🔗 **No distributed tracing** | Correlation ID is propagated but not integrated with Jaeger/Zipkin. |
-| 🔄 **GoldenGate not running** | Extract/Replicat configuration is documented but not deployed locally. |
 
 ---
 
@@ -407,6 +400,7 @@ Enterprise-grade observability stack:
 | Property | Env Var | Default | Description |
 |----------|---------|---------|-------------|
 | `oracle.url` | `ORACLE_URL` | `jdbc:oracle:thin:@localhost:1521/pdb_oltp` | 🔗 Oracle connection URL |
+| `oracle.dedicated-url` | `ORACLE_DEDICATED_URL` | local: `jdbc:oracle:thin:@localhost:1521/pdb_corp`; prod: required | 🏢 Dedicated PDB connection; prod must explicitly point at PDB_CORP |
 | `oracle.username` | `ORACLE_USER` | `APP_RUNTIME` | 👤 Database username |
 | `oracle.password` | `ORACLE_PASSWORD` | — (required) | 🔑 Database password |
 | `oracle.ucp.max-pool-size` | — | `20` | 📊 Maximum connection pool size |
@@ -452,7 +446,7 @@ mvn clean test
 | 🧪 Unit | `GlobalExceptionHandlerTest.java` | Exception → JSON error response mapping |
 | 🧪 Unit | (17 more classes) | Controllers, filters, DAOs, tenant context, reporting, rate limiter, executor, ArchUnit, security matrix, credential hardening |
 | 🔗 Integration | `IT_order_to_payment.sql` | Full lifecycle: create → confirm → pay → MV refresh → assert |
-| ⚡ Concurrency | `run_concurrency_test.bat` | N workers compete for 1 stock unit → exactly 1 confirms |
+| ⚡ Concurrency | `rake qa:db:concurrency` | N workers compete for 1 stock unit → exactly 1 confirms |
 | 🔒 Security | `T_security_tenant_isolation.sql` | VPD: tenant 1 cannot see tenant 2 data |
 
 ### 📊 Test Coverage
@@ -463,10 +457,10 @@ JaCoCo generates coverage reports at `backend/target/site/jacoco` (after `mvn te
 
 ```bash
 # From repo root (NOT cd tests/concurrency)
-tests\concurrency\run_concurrency_test.bat
+rake qa:db:concurrency
 ```
 
-> Verifies pessimistic locking: with stock=1 and 5 parallel workers, exactly 1 worker confirms. Helper scripts in the same folder: `C_setup_stock.sql`, `C_concurrent_orders_worker.sql`, `C_worker_runner.bat`, `C_assert_results.sql`.
+> Verifies pessimistic locking: with stock=1 and 5 parallel workers, exactly 1 worker confirms. SQL helpers are in `tests/concurrency/`; the Rake task manages the workers and cleanup.
 
 ### 🔒 Security Test
 
@@ -510,26 +504,20 @@ poc_oracle/
 │   │                                        #   V023 runtime privilege fixes · V024 idempotency fingerprint · V025 VPD policy compensation
 │   │                                        #   V026 v_order_detail (single round-trip order read)
 │   ├── 📂 packages/                        # PL/SQL package specs (pks_*) + bodies (pkb_*) + deploy script
-│   ├── 📂 backup/                          # RMAN scripts (rman_full_backup.rcv, rman_restore.bat, backup_verify.sql) — unexecuted live
+│   ├── 📂 backup/                          # RMAN scripts (manual and unexecuted in this lab)
 │   ├── 🔒 security/                        # VPD predicate function + policy application + verify_vpd_policies.sql (16 policies)
 │   └── 🌱 seed/                            # Idempotent seed (3 tenants, products, inventory for all products,
 │                                            #   multi-line demo order SO-ACME-0002, per-tenant VPD context)
-├── 🔄 goldengate/
-│   ├── 📂 extract/                         # GGSCI extract group setup (.ggsci, no semicolons)
-│   ├── 📂 replicat/                        # GGSCI replicat group setup (.ggsci, no semicolons)
-│   ├── 📂 parameter-files/                 # Extract + replicat parameter files (RMTHOST/RMTTRAIL + USERIDALIAS ogg_admin)
-│   └── 📂 docs/                            # GoldenGate architecture documentation (illustrative, not deployed locally)
 ├── 🏗️ infrastructure/
 │   ├── 🐳 podman/
-│   │   ├── 📄 compose.yaml                 # Podman Compose: Oracle Free 23-slim
 │   │   ├── 📄 .env.example                 # Environment variable template
 │   │   └── 📜 scripts/01-init-db.sql       # First-startup DB setup (users, grants)
 │   └── 🌐 networking/                      # Network topology documentation
 └── 🧪 tests/
     ├── 🔗 integration/                     # End-to-end order-to-payment flow
-    ├── ⚡ concurrency/                     # run_concurrency_test.bat + C_* worker/setup/assert helpers
+    ├── ⚡ concurrency/                     # C_* worker/setup/assert SQL helpers; run with rake qa:db:concurrency
     ├── 🔒 security/                        # VPD cross-tenant isolation test (both directions + privilege asserts)
-    ├── 📈 performance/                     # P01-P06 workloads + run_performance.bat (SRS §107; unexecuted)
+    ├── 📈 performance/                     # P01-P06 workloads (SRS §107; run with rake qa:perf)
     └── 🛡️ resilience/                      # R01-R04 backend-kill/db-outage/pool-limits/VPD-absence (SRS §117; partial)
 ```
 
@@ -537,67 +525,20 @@ poc_oracle/
 
 ## 🚀 Quick Start
 
-### 📋 Prerequisites
+The supported lab runs on a dedicated local **kind** cluster using Podman as its container provider. It provisions Oracle PDB_OLTP (shared/VPD) and PDB_CORP (dedicated tier), and applies the same Flyway migrations, packages, and seed data to both PDBs.
 
-- 🐳 Podman (or Docker)
-- ☕ Java 21+
-- 📦 Maven 3.9+
+Prerequisites: Podman with its machine running, kind, kubectl, Ruby/Rake, and Maven 3.9+. From the repository root:
 
-### 1️⃣ Start Oracle Database
-
-```bash
-cd infrastructure/podman
-cp .env.example .env    # Edit .env and set ORACLE_PASSWORD (and ORACLE_DATABASE=PDB_OLTP)
-podman compose up -d
+```sh
+cp infrastructure/podman/.env.example infrastructure/podman/.env
+# Set lab credentials in infrastructure/podman/.env before first use.
+rake qa:up
+rake qa:db:init
+rake qa:wait
+rake qa:smoke
 ```
 
-> ⏳ Wait ~90 seconds for Oracle to be ready (health check passes).
-> Init scripts under `scripts/` are mounted at `/container-entrypoint-initdb.d` (run on first start as SYS).
-
-### 2️⃣ Run Database Migrations
-
-```bash
-cd ../../backend
-mvn flyway:migrate "-Dflyway.password=<APP_OWNER password>"
-# Defaults: flyway.user=APP_OWNER, flyway.url=jdbc:oracle:thin:@localhost:1521/pdb_oltp,
-# migrations from filesystem:../database/migrations (V001-V026).
-# NOTE: spring.flyway is disabled at runtime — Maven/rake own migrations.
-```
-
-### 3️⃣ Deploy PL/SQL Packages
-
-```bash
-sqlplus APP_OWNER/<password>@localhost:1521/PDB_OLTP @database/packages/deploy_packages.sql
-```
-
-### 4️⃣ Start Application
-
-```bash
-# The local profile has NO default DB password: export it first (the host
-# JVM never reads infrastructure/podman/.env — that file is for compose).
-export ORACLE_PASSWORD=LabRuntimePass1   # runtime lab user (see .env.example)
-mvn spring-boot:run
-# Local defaults: admin / changeme (ADMIN) and operator / changeme (OPERATOR),
-# overridable via APP_ADMIN_PASSWORD / APP_OPERATOR_PASSWORD.
-# PROD has no defaults — startup fails fast without env passwords
-# (CredentialHardeningCheck also rejects weak values).
-# Tenant binding: operator may only use APP_OPERATOR_TENANTS (default ACME);
-# GET /api/v1/tenants/** is ADMIN-only.
-```
-
-### 5️⃣ Verify
-
-```bash
-# 🏥 Health check (permitAll; actuator base-path is /internal, no /actuator/** path)
-curl http://localhost:8080/internal/health
-
-# 📦 Create order (requires ORDER_OPERATOR role + tenant binding)
-curl -X POST http://localhost:8080/api/v1/orders \
-  -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: ACME" \
-  -u operator:changeme \
-  -d '{"customerId":1,"currency":"USD"}'
-```
+`rake qa:up` creates the `poc-oracle` cluster and deploys the images. `qa:db:init` migrates, deploys packages, and seeds both PDBs; `qa:wait` waits for the backend to become ready after schema initialization. See [QA on Kubernetes](#-qa-on-kubernetes-kind--podman) for teardown, database checks, E2E, concurrency, resilience, and performance tasks. This POC has no compose-based lab.
 
 ---
 
@@ -620,7 +561,7 @@ curl -X POST http://localhost:8080/api/v1/orders \
 
 ## 🧪 QA on Kubernetes (kind + Podman)
 
-Repeatable end-to-end QA on a local kind cluster (separate from the compose lab above). The whole flow is scripted in the `Rakefile` (`rake -T` lists all tasks; run from the repo root).
+Repeatable QA runs on the local kind cluster. The whole flow is scripted in the `Rakefile` (`rake -T` lists all tasks; run from the repo root).
 
 > 🔑 **The QA cluster intentionally runs the `local` Spring profile** with in-memory users and lab credentials (`admin:changeme`). Kind port mappings bind to `127.0.0.1` only. The `prod` profile (env-only secrets, fail-fast on weak passwords) is demonstrated by code and unit tests, not deployed in this lab.
 
@@ -634,7 +575,7 @@ Repeatable end-to-end QA on a local kind cluster (separate from the compose lab 
 ### Bring-up
 
 ```bash
-rake qa:cluster:create   # kind cluster 'poc-qa' (Podman provider)
+rake qa:cluster:create   # kind cluster 'poc-oracle' (Podman provider)
 rake qa:image:build      # backend image via Podman (multi-stage Dockerfile)
 rake qa:image:load       # load image into the kind node (via tarball)
 rake qa:deploy           # namespace + secrets + Oracle StatefulSet + backend
@@ -642,32 +583,33 @@ rake qa:db:init          # flyway migrate (V001–V026) + PL/SQL packages + seed
 rake qa:wait             # until Oracle + backend rollout are Ready
 rake qa:smoke            # 8 API checks: health, auth, order, idempotency-409, refresh, isolation, tenants (RBAC + FR-001), metrics
 rake qa:db:verify        # DB verification: 16 VPD policies + tenant isolation + order-to-payment suites
+rake e2e:all             # DB E01-E06 + API physical routing (backend must be up)
 ```
 
 ### DB test suites (run in the Oracle pod, which ships sqlplus)
 
 ```bash
 # Copy a suite into the pod and run it (APP_RUNTIME for IT/security):
-kubectl cp tests/integration/IT_order_to_payment.sql poc-qa/oracle-0:/tmp/it.sql
-kubectl exec -n poc-qa oracle-0 -- bash -lc \
+kubectl cp tests/integration/IT_order_to_payment.sql poc-oracle/oracle-0:/tmp/it.sql
+kubectl exec -n poc-oracle oracle-0 -- bash -lc \
   "sqlplus -L -S app_runtime/LabRuntimePass1@//localhost:1521/pdb_oltp @/tmp/it.sql"
 
 # Concurrency (FT-003): 10 racers on stock=1, exactly 1 CONFIRMED
 rake qa:db:concurrency   # QA_WORKERS=10 by default; restores stock to 100 afterwards
 
 # Failure test FT-001: controlled behavior on DB outage
-kubectl scale statefulset oracle -n poc-qa --replicas=0
+kubectl scale statefulset oracle -n poc-oracle --replicas=0
 # ... POST /orders -> controlled 503 JSON (~30s pool timeout, no hang);
 # ... pod goes Unready (readiness includes db) but is NOT restarted ...
-kubectl scale statefulset oracle -n poc-qa --replicas=1
+kubectl scale statefulset oracle -n poc-oracle --replicas=1
 rake qa:wait && rake qa:smoke   # recovery check
 ```
 
-### QA evidence (live runs, kind `poc-qa`)
+### QA evidence (previous lab runs, kind `poc-oracle`)
 
 | Check | Result |
 |---|---|
-| `mvn clean test` | 260/260 green in 23 classes (JaCoCo report, no gate by design; incl. ArchUnit, SecurityMatrix, CredentialHardening, DAO tests) |
+| `mvn -o test` | 271/271 green (JaCoCo report, no gate by design; incl. ArchUnit, SecurityMatrix, CredentialHardening, DAO tests) |
 | `rake qa:smoke` | 8/8 PASS (health, 401, create, idempotency 409, refresh, isolation, tenants RBAC + FR-001 positive path, metrics) |
 | `rake qa:db:verify` | verify-vpd (16/16) + T_security isolation + IT order-to-payment PASSED (IT owner-cleanup leaves no residue) |
 | `IT_order_to_payment.sql` | PASSED (confirm → payment → MV → audit → outbox asserts, CONFIRMED/PAID asserts + cleanup) |
@@ -689,10 +631,10 @@ rake qa:wait && rake qa:smoke   # recovery check
 ### QA lessons (also in Known Limitations)
 
 - 🌱 Seed requires package bodies deployed **first** (`qa:db:init` order): only the designated package may touch `APP_CTX` (ORA-01031 otherwise). Seed ends with explicit `COMMIT` (never rely on client exit-commit).
-- 🔑 Seed IDs are **not deterministic** (identity columns): the SQL suites and `rake qa:db:concurrency` resolve tenant/customer/product/warehouse **by business code**; the Windows concurrency `.bat` still defaults to seed IDs `1` (override via env vars).
+- 🔑 Seed IDs are **not deterministic** (identity columns): the SQL suites and `rake qa:db:concurrency` resolve tenant/customer/product/warehouse **by business code**.
 - 🩺 Probes: liveness = `/internal/health/liveness` (app-only), readiness = `/internal/health/readiness` (**includes `db`**). A DB outage makes the pod Unready without restarting it.
 - 🔄 `qa:wait` tracks the rollout (replica counts lie during rolling updates).
-- 🐳 kind nodes don't auto-start after a machine reboot: `podman start poc-qa-control-plane` (data survives on the PVC).
+- 🐳 kind nodes don't auto-start after a machine reboot: `podman start poc-oracle-control-plane` (data survives on the PVC).
 
 ---
 
@@ -745,10 +687,8 @@ rake qa:wait && rake qa:smoke   # recovery check
 | 🖥️ Application instance failure | Load balancer (architecture) | 🏗️ Architecture |
 | 🗄️ Database instance failure | Oracle RAC | 🏗️ Architecture |
 | 💾 Storage failure | Oracle ASM | 🏗️ Architecture |
-| 🌐 Site failure | Oracle Data Guard | 🏗️ Architecture |
 | ⚠️ Logical data error | Flashback / RMAN recovery | 🏗️ Architecture |
 | 💽 Physical data loss | RMAN backup | 🏗️ Architecture |
-| 🔄 Downstream integration | GoldenGate replication | 📄 Documented (not deployed locally) |
 
 ---
 
@@ -762,16 +702,16 @@ Honest boundaries of this POC:
 - 🔓 **Tenant activate/suspend (FR-002/FR-003) has no REST endpoint** — the procedures exist in `pkg_tenant` but nothing calls them; likewise AC-002 (create customer/product via API) is seed-only. The API implements FR-001 (provisioning) and the order-lifecycle FRs.
 - 🏁 **Order flow ends at CONFIRMED/PAID** — no `SHIPPED`/`COMPLETED` endpoints (the state machine shows the full target lifecycle)
 - 👤 **Tenant resolved from `X-Tenant-ID` header + in-memory users** — not from identity claims; an operator is bound to `operator-allowed-tenants` (default ACME; ADMIN any, else 403). Residual: not JWT/LDAP.
-- 🏗️ **GoldenGate / RAC / Data Guard not running locally** — enterprise target architecture is documented only (GG illustrative `.ggsci`; RAC/ASM/DG live out of scope on the single-node lab)
+- 🏗️ **RAC / ASM not running locally** — enterprise target architecture is documented only (RAC/ASM live out of scope on the single-node lab)
 - ☕ **Spring Boot 3.3.5** — current pinned version. NOTE (2026-09): the 3.3.x line is past OSS end-of-life (no security patches); kept deliberately for this POC snapshot. Upgrading to a supported 3.4/3.5 line + `mvn test` is the first backlog item before any real use.
 - 📄 **PL/SQL package sources duplicated** — specs exist both in V010 migrations and `database/packages/pks_*` (bodies in `pkb_*`); they must be kept in sync manually
 - 💎 **Java domain aggregate deleted** — PL/SQL (`pkg_order_management`) is the single authority; `PaymentMethod` kept as literal enum + consistency test
 - 🌱 **Seed order matters** — package bodies must be deployed before seeding (`qa:db:init` order): only `pkg_tenant` may touch `APP_CTX` (direct `DBMS_SESSION` calls raise ORA-01031); seed ends with an explicit `COMMIT`
-- 🔑 **Seed IDs are not deterministic** — identity columns vary per environment; the SQL suites and `rake qa:db:concurrency` resolve tenant/customer/product/warehouse by business code; `tests/concurrency/*.bat` defaults still assume a fresh seed (IDs `1`) and must be overridden elsewhere
+- 🔑 **Seed IDs are not deterministic** — identity columns vary per environment; the SQL suites and `rake qa:db:concurrency` resolve tenant/customer/product/warehouse by business code
 - 🩺 **K8s probe split** — liveness is app-only while readiness includes `db`: a DB outage sheds traffic (Unready) without restarting the pod
-- 🐳 **kind nodes don't survive machine reboots** — recover with `podman start poc-qa-control-plane` (Oracle data survives on its PVC)
+- 🐳 **kind nodes don't survive machine reboots** — recover with `podman start poc-oracle-control-plane` (Oracle data survives on its PVC)
 - 🔄 **MV refresh limiter is per-JVM** — cooldown is not shared across app nodes (multi-node gap, documented)
-- 🔑 **Batch scripts use env vars with validation** (`DB_USER/DB_PASS/...` default to lab values with redacted warnings); rake secrets via temp env-file + redacted logs; remaining lab defaults (`LabRuntimePass1`, `changeme`) are local-only, prod requires env passwords
+- 🔑 **Rake QA tasks use environment configuration** and redact connection credentials in logs; remaining lab defaults (`LabRuntimePass1`, `changeme`) are local-only, prod requires env passwords
 - 🧹 **IT cleanup is two-layered** — the suite's own cleanup is best-effort by design (`APP_RUNTIME` holds no `DELETE` on business tables, least privilege), so a passing run leaves its `CONFIRMED+PAID` probe order behind; `rake qa:db:it` removes exactly that run's rows as `APP_OWNER` (children before parent) and releases its 2 reserved units (fixed `qty=2 PRD-001/WH1/ACME` probe). Manual runs leave residue — re-running the rake task does not clean previous manual runs.
 - ➕ **`POST /{id}/lines` accepts no `Idempotency-Key`** — a retried add-line inserts a second row (total is re-summed). Create/confirm/cancel/payment are idempotent; add-line callers must not blindly retry. A key or a unique `(order_id, product_id)` guard is backlog.
 - ⏳ **Idempotency assumes the caller's transaction** — `IdempotentOperationExecutor.execute` has no `@Transactional` of its own: all four current call sites are `@Transactional`, so PENDING→COMPLETED (or rollback) is atomic. Invoking it outside a transaction would commit a stuck `PENDING` key permanently (no TTL/sweeper by design, since the surrounding rollback is the cleanup). Also: payloads > 4000 chars are not stored, so their replay re-reads current state rather than the original response.
