@@ -504,19 +504,6 @@ Each PNG is the raw log of the run rendered as a terminal, not a retyped transcr
 | ![Outbox](screenshots/06-outbox-relay.png) | Writer leaves the event `NEW`; the relay publishes it and the reader sees `PUBLISHED` |
 | ![API](screenshots/07-api-health.png) | Live backend health/readiness |
 
----
-
-## ⚠️ Known limitations (by design, not bugs)
-
-- **Reporting is per PDB.** `refresh` and the MV queries act on the PDB the request routes to (decided by the tenant's tier). There is no cross-PDB aggregation: an “all tenants” report across `PDB_OLTP` and `PDB_CORP` does not exist.
-- **Concurrent duplicates of an idempotency key serialize on the unique index.** That is the documented correctness trade-off (no fast 409 for in-flight keys); under aggressive retries it holds pool connections.
-- **The outbox has no broker.** The relay drives the real state transitions, but the publish step is a no-op sink, and the batch is unordered ("up to N `NEW` rows") because Oracle cannot lock rows through the `FETCH FIRST` view.
-- **Tenant provisioning is a dual write** (shared PDB, then dedicated PDB) without 2PC. An id mismatch fails closed and a retry repairs it; there is no automatic reconciliation job.
-- **Tier is fixed at provisioning.** Changing a tenant to `ENTERPRISE` does not migrate its existing rows to `PDB_CORP`.
-- **The database is single-instance.** Oracle Database Free has no clustering layer; the repo makes no high-availability claim.
-- **Lab credentials** (`ChangeMe123!`, `LabOwnerPass1`, …) are for the `local` profile only; the `prod` profile requires environment secrets and fails fast on weak values.
-
----
 
 ## 📜 License
 
