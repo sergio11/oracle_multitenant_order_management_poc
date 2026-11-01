@@ -29,6 +29,8 @@ CREATE OR REPLACE CONTEXT app_ctx USING app_owner.pkg_tenant;
 @@pks_pkg_tenant.sql
 @@pks_pkg_inventory.sql
 @@pks_pkg_order_management.sql
+@@pks_pkg_outbox.sql
+@@pks_pkg_idempotency.sql
 
 --=====================================================================
 -- Package bodies
@@ -37,6 +39,8 @@ CREATE OR REPLACE CONTEXT app_ctx USING app_owner.pkg_tenant;
 @@pkb_pkg_tenant.sql
 @@pkb_pkg_inventory.sql
 @@pkb_pkg_order_management.sql
+@@pkb_pkg_outbox.sql
+@@pkb_pkg_idempotency.sql
 
 --=====================================================================
 -- Grants for least-privilege users (SRS 58, 59)
@@ -49,6 +53,8 @@ CREATE OR REPLACE CONTEXT app_ctx USING app_owner.pkg_tenant;
 GRANT EXECUTE ON pkg_audit            TO app_runtime;
 GRANT EXECUTE ON pkg_tenant           TO app_runtime;
 GRANT EXECUTE ON pkg_order_management TO app_runtime;
+GRANT EXECUTE ON pkg_outbox           TO app_runtime;
+GRANT EXECUTE ON pkg_idempotency      TO app_runtime;
 
 PROMPT Packages deployed successfully.
 EXIT SUCCESS

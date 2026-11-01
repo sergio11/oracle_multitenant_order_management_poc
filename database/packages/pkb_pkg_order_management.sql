@@ -288,14 +288,23 @@ CREATE OR REPLACE PACKAGE BODY pkg_order_management AS
         -- (sales_order_line.reserved_warehouse_id, V020) so cancel_order
         -- releases from the SAME warehouse (M4).
         -- See SRS §37 for inventory reservation requirements.
-        SELECT warehouse_id INTO v_warehouse_id
-          FROM (
-            SELECT warehouse_id
-              FROM warehouse
-             WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
-             ORDER BY warehouse_id
-          )
-         WHERE ROWNUM = 1;
+        -- A tenant with no ACTIVE warehouse is a configuration error: map
+        -- it to a domain error (-20037 -> 409) instead of letting
+        -- NO_DATA_FOUND surface as a generic 500.
+        BEGIN
+            SELECT warehouse_id INTO v_warehouse_id
+              FROM (
+                SELECT warehouse_id
+                  FROM warehouse
+                 WHERE tenant_id = p_tenant_id AND status = 'ACTIVE'
+                 ORDER BY warehouse_id
+              )
+             WHERE ROWNUM = 1;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                RAISE_APPLICATION_ERROR(-20037,
+                    'No ACTIVE warehouse configured for tenant ' || p_tenant_id);
+        END;
 
         -- Reserve inventory for each line (atomic, locks rows) and
         -- record WHERE the stock was reserved: cancel_order releases

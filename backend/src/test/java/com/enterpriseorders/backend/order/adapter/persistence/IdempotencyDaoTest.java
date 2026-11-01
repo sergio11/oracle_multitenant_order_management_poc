@@ -65,6 +65,29 @@ class IdempotencyDaoTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void shouldMapCreatedAtForReplayWindow() {
+        java.time.Instant created = java.time.Instant.parse("2026-01-02T03:04:05Z");
+        when(jdbcTemplate.query(anyString(), any(ResultSetExtractor.class), eq(9L), eq("key-2")))
+                .thenAnswer(inv -> {
+                    ResultSetExtractor<Optional<IdempotencyRecord>> extractor = inv.getArgument(1);
+                    var rs = mock(java.sql.ResultSet.class);
+                    when(rs.next()).thenReturn(true);
+                    when(rs.getLong("aggregate_id")).thenReturn(1L);
+                    when(rs.getString("operation")).thenReturn("CONFIRM_ORDER");
+                    when(rs.getString("status")).thenReturn("COMPLETED");
+                    when(rs.getTimestamp("created_at"))
+                            .thenReturn(java.sql.Timestamp.from(created));
+                    return extractor.extractData(rs);
+                });
+
+        Optional<IdempotencyRecord> result = idempotencyDao.findByKey(9L, "key-2");
+
+        assertTrue(result.isPresent());
+        assertEquals(created, result.get().createdAt());
+    }
+
+    @Test
     void shouldInsertPendingAndReturnTrue() {
         when(jdbcTemplate.update(anyString(), eq(9L), eq("key-1"), eq("CONFIRM_ORDER"), eq(1L), eq("fp-1")))
                 .thenReturn(1);

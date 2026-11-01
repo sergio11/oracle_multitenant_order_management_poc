@@ -54,7 +54,7 @@ Oracle UCP (Universal Connection Pool) with explicit JDBC eliminates the overhea
 
 ### ⚡ Concurrency Control
 
-Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inventory under concurrent load. The concurrency test demonstrates that with exactly 1 unit of stock and N parallel workers, exactly 1 worker confirms successfully while all others fail with `INSUFFICIENT_INVENTORY`.
+Pessimistic locking via `SELECT FOR UPDATE WAIT 5` in PL/SQL prevents overselling inventory under concurrent load, and a lock that cannot be acquired in 5 seconds fails as an actionable `409 LOCK_TIMEOUT` instead of hanging a request (and a pooled connection) forever. The concurrency test demonstrates that with exactly 1 unit of stock and N parallel workers, exactly 1 worker confirms successfully while all others fail with `INSUFFICIENT_INVENTORY`.
 
 ---
 
@@ -67,8 +67,8 @@ Pessimistic locking via `SELECT FOR UPDATE` in PL/SQL prevents overselling inven
 | 🔐 **Database-level multi-tenancy** | VPD/DBMS_RLS on 16 objects provides invisible, fail-closed tenant filtering at the database layer. |
 | ⚡ **Atomic business logic** | PL/SQL `confirm_order` procedure: validates + locks + reserves + transitions + audits + outbox in one transaction. PL/SQL is the authoritative implementation of order state changes. |
 | 🔷 **Hexagonal architecture** | Clean port/adapter separation enforced by ArchUnit (15 rules). Controllers depend on use case interfaces, services depend on repository interfaces. Ports carry neutral business models (`OrderBO`, `TenantBO`); controllers map them to DTOs with MapStruct (wire JSON unchanged). Error-code→HTTP mapping is centralized in `GlobalExceptionHandler` (the tenant filter serializes its own path errors through `statusFor`). |
-| 🔄 **Idempotent operations** | Create, confirm, cancel, and payment operations accept `Idempotency-Key` and safely handle retries. |
-| 📦 **Transactional outbox** | PL/SQL writes outbox events in the same transaction as business mutations. |
+| 🔄 **Idempotent operations** | Create, confirm, cancel, and payment operations accept `Idempotency-Key` and safely handle retries, with a bounded replay window and a retention purge. |
+| 📦 **Transactional outbox** | PL/SQL writes outbox events in the same transaction as business mutations; `pkg_outbox` relays them with `SKIP LOCKED`. |
 | 🛡️ **Pessimistic locking** | `SELECT FOR UPDATE` on inventory prevents overselling. Concurrency test proves exactly-1-of-N success with stock=1. |
 | 👤 **Least privilege** | Three Oracle users: `APP_OWNER` (DDL), `APP_RUNTIME` (DML via packages + idempotency only), `APP_REPORTING` (read-only: SELECT + tenant/VPD + refresh proc). |
 | 📊 **Materialized Views** | OLTP-reporting separation via `MV_ORDER_DAILY_SUMMARY` and `MV_PRODUCT_SALES_SUMMARY` with on-demand refresh. |
@@ -101,21 +101,30 @@ JPA/Hibernate was deliberately excluded. The POC demonstrates:
 
 ### 🔒 VPD Over Application-Level Filtering
 
-Tenant isolation is enforced at the database level, not in application code:
+Tenant isolation is enforced at the database level, not in application code.
 
-This means a statement with a missing or forged tenant context returns zero rows (fail-closed), and the predicate only accepts a numeric value. The complementary control — binding each principal to its allowed tenants (`operator-allowed-tenants`) — is enforced at the application boundary.
+A statement with a missing or non-numeric tenant context returns zero rows (fail-closed), and `pkg_tenant.set_tenant_context` now rejects unknown or inactive tenants instead of storing an arbitrary number.
+
+**Scope of the guarantee (stated precisely):** VPD eliminates the *forgotten `WHERE` clause* class of leak. It is not a defense against arbitrary SQL execution: a session that can run PL/SQL can call the context setter with another tenant id. The real principal↔tenant binding is the application boundary (`TenantContextFilter` + `operator-allowed-tenants`), and the runtime isolation boundary is `APP_RUNTIME`/`APP_REPORTING`. `APP_OWNER` holds `EXEMPT ACCESS POLICY` because Oracle requires it to create and refresh materialized views over VPD-protected masters — the owner is a deployment identity, not a runtime one.
 
 ### 🔄 Idempotency at the Database Level
 
-The `IDEMPOTENCY_KEY` table with unique constraint per tenant prevents duplicate operations:
+The `IDEMPOTENCY_KEY` table with a unique constraint per tenant prevents duplicate operations. The key is **bound to operation + aggregateId + request fingerprint**: reusing it against a different operation, aggregate, or payload returns `409 IDEMPOTENCY_KEY_CONFLICT`.
 
-The key is **bound to operation + aggregateId**. Reusing a key against a different operation or aggregate returns `409 IDEMPOTENCY_KEY_CONFLICT`.
+Idempotency is a **bounded** cache, not an eternal one:
+
+- `COMPLETED` rows are replayed only inside `app.idempotency.retention-days` (default 30). Older rows return `410 IDEMPOTENCY_KEY_EXPIRED`, because the stored response is a historical snapshot — replaying “confirmed” for an order cancelled weeks ago would be a lie.
+- `pkg_idempotency.purge_expired` (definer's rights, invoked by the maintenance scheduler) deletes expired `COMPLETED` rows and stale `PENDING` rows. A `PENDING` row older than a day is a crashed request and must not answer retries with `409 IDEMPOTENCY_IN_PROGRESS` forever.
 
 ### 📦 Transactional Outbox Pattern
 
-Outbox events are written by PL/SQL **within the same transaction** as business mutations:
+Outbox events are written by PL/SQL **within the same transaction** as business mutations, and `pkg_outbox.relay_once` closes the loop:
 
-This keeps business changes and their outbox records transactionally consistent.
+- Claims a bounded batch with `FOR UPDATE SKIP LOCKED` (concurrent relays skip each other's rows instead of blocking).
+- The batch is bounded with `ROWNUM`, not `FETCH FIRST`: Oracle rejects `FETCH FIRST … FOR UPDATE` with `ORA-02014` (row limiting wraps the query in a view, and rows of a row-window view cannot be locked). The batch is therefore "up to N `NEW` rows", not "the N oldest" — publish order carries no meaning while the sink is a no-op.
+- Drives `NEW → PROCESSING → PUBLISHED` in one transaction, so a crash leaves events `NEW` and the next run retries them (at-least-once).
+- There is no broker in this POC: the publish step is a no-op sink, but the state transitions are real rows and are exercised end to end.
+- The relay is a cross-tenant maintenance operation, so it runs through definer's-rights PL/SQL (same model as `refresh_reporting_views`), driven by `MaintenanceScheduler`.
 
 ---
 
@@ -136,7 +145,7 @@ Tenant isolation is enforced at the database level using Oracle VPD/DBMS_RLS:
 - 🔒 **Fail-closed predicate**: Without `SYS_CONTEXT('APP_CTX','TENANT_ID')`, queries return zero rows
 - 🤖 **Automatic filtering**: Queries and data changes on protected objects are scoped to the current tenant
 - 📊 **Materialized views** carry VPD policies without `sec_relevant_cols` — always applied
-- 🛡️ **Defense-in-depth**: injection against a VPD-protected table yields zero rows without a valid numeric context; principal↔tenant binding (the complementary control) is enforced at the application boundary
+- 🛡️ **Defense-in-depth, precisely scoped**: VPD makes a missing context return zero rows and rejects unknown/inactive tenants; it does not substitute for principal↔tenant binding (enforced at the application boundary) nor for input handling. See “Scope of the guarantee” above.
 
 ### 📋 Order Lifecycle Management
 
@@ -157,8 +166,9 @@ stateDiagram-v2
 
 Pessimistic locking prevents overselling:
 
-- 🔒 `SELECT FOR UPDATE` in `pkg_inventory.reserve_stock` locks the inventory row
-- ⏳ Concurrent transactions queue on the lock — only one can reserve
+- 🔒 `SELECT FOR UPDATE WAIT 5` in `pkg_inventory.reserve_stock` locks the inventory row
+- ⏳ Concurrent transactions queue on the lock — only one can reserve; a lock held longer than 5 s returns `409 LOCK_TIMEOUT` instead of blocking the request thread indefinitely
+- 🧭 Lines are processed in `product_id` order, so lock acquisition order is deterministic and deadlocks are rare; `ORA-00060` still maps to `409 CONCURRENT_MODIFICATION`
 - ✅ `CHECK` constraint ensures `available_quantity >= 0`
 - 🧪 Concurrency test: stock=1, N workers → exactly 1 confirms, rest fail with `INSUFFICIENT_INVENTORY`
 
@@ -169,7 +179,9 @@ Critical operations are idempotent via `idempotency_key` table:
 - 📨 `create`, `confirm`, `cancel` and `register_payment` accept `Idempotency-Key` header (create returns `201` + `Location`); `OrderResponseDTO` carries `lines` and no `tenantId`; cancel rejects `SHIPPED` (409) and blank reason (400)
 - 📝 First execution: insert PENDING → execute → mark COMPLETED in the same transaction
 - 🔁 Retry with the same key returns the stored result without re-executing the operation
-- 🔒 Key is bound to **operation + aggregateId** — misuse returns `409 IDEMPOTENCY_KEY_CONFLICT`; unique constraint per tenant means a concurrent duplicate waits on the index (no fast 409 for in-flight keys), then replays or conflicts
+- 🔒 Key is bound to **operation + aggregateId + request fingerprint** — misuse returns `409 IDEMPOTENCY_KEY_CONFLICT`
+- ⏳ **Bounded replay window**: `COMPLETED` keys older than `app.idempotency.retention-days` (30) return `410 IDEMPOTENCY_KEY_EXPIRED`; a maintenance job purges them
+- ⚠️ Known trade-off: a *concurrent* duplicate waits on the unique index (no fast 409 for in-flight keys). Under aggressive client retries this can hold pool connections; see “Known limitations”
 
 ### 📦 Transactional Outbox Pattern
 
@@ -177,6 +189,7 @@ Transactional event records without distributed transactions:
 
 - 📦 Outbox events written by PL/SQL **within the same transaction** as business mutations
 - 🔗 No dual-write problem — outbox and business data are always consistent
+- 🔁 Relay side implemented: `pkg_outbox.relay_once` claims events with `FOR UPDATE SKIP LOCKED` and drives `NEW → PROCESSING → PUBLISHED` (no broker: the publish step is a no-op sink)
 
 ### 📊 Materialized View Reporting
 
@@ -215,6 +228,11 @@ Enterprise-grade observability stack:
 | `oracle.ucp.abandoned-connection-timeout` | — | `60` | 🧹 Backstop for stale sessions |
 | `oracle.ucp.connection-validation-timeout` | — | `10` | ✅ Validation timeout |
 | `app.reporting.refresh-cooldown-seconds` | — | `60` | ⏱️ MV refresh cooldown |
+| `app.maintenance.enabled` | `APP_MAINTENANCE_ENABLED` | `false` local / `true` prod | 🔁 Enables outbox relay + idempotency retention jobs |
+| `app.maintenance.outbox-interval-ms` | — | `30000` | ⏲️ Outbox relay interval |
+| `app.maintenance.outbox-batch-size` | — | `100` | 📦 Events claimed per relay run |
+| `app.maintenance.idempotency-purge-interval-ms` | — | `3600000` | 🧹 Retention purge interval |
+| `app.idempotency.retention-days` | `APP_IDEMPOTENCY_RETENTION_DAYS` | `30` | ⏳ Replay window; older keys return `410` |
 | `app.security.tenancy.operator-allowed-tenants` | `APP_OPERATOR_TENANTS` | `ACME` | 👤 Non-admin tenant binding (ADMIN: any) |
 | `app.security.admin.password` | `APP_ADMIN_PASSWORD` | `changeme` (local only; prod requires env, fail-fast) | 🔑 Admin user password (HTTP Basic `admin`) |
 | `app.security.operator.password` | `APP_OPERATOR_PASSWORD` | `changeme` (local only; prod requires env, fail-fast) | 🔑 Operator user password (HTTP Basic `operator`) |
@@ -297,6 +315,7 @@ poc_oracle/
 │       │   ├── 📋 order/                   # adapter/web(+mapper)|persistence, application (incl. IdempotentOperationExecutor), port/input|output, dto, model (OrderBO)
 │       │   │   └── 📤 port/                # Input (use cases) / Output (repositories)
 │       │   ├── 📊 reporting/               # adapter/web|persistence, application, port/input|output(+dto), ratelimiter/
+│       │   ├── 📤 outbox/                  # port/output + adapter/persistence (relay of pkg_outbox)
 │       │   ├── 💎 common/domain/           # Shared domain values and enums
 │       │   ├── ⚠️ exception/               # BusinessException (HttpStatus), DatabaseException, PlsqlErrorMapper
 │       │   ├── 🌐 web/                     # CorrelationFilter, GlobalExceptionHandler, ApiError
@@ -317,12 +336,13 @@ poc_oracle/
 │   │   ├── 📄 .env.example                 # Environment variable template
 │   │   └── 📜 scripts/01-init-db.sql       # First-startup DB setup (users, grants)
 │   └── 🌐 networking/                      # Network topology documentation
-└── 🧪 tests/
-    ├── 🔗 integration/                     # End-to-end order-to-payment flow
-    ├── ⚡ concurrency/                     # C_* worker/setup/assert SQL helpers; run with rake qa:db:concurrency
-    ├── 🔒 security/                        # VPD cross-tenant isolation test (both directions + privilege asserts)
-    ├── 📈 performance/                     # Performance workloads
-    └── 🛡️ resilience/                      # Backend, database, pool, and VPD scenarios
+├── 🧪 tests/
+│   ├── 🔗 integration/                     # End-to-end order-to-payment flow
+│   ├── ⚡ concurrency/                     # C_* worker/setup/assert SQL helpers; run with rake qa:db:concurrency
+│   ├── 🔒 security/                        # VPD cross-tenant isolation test (both directions + privilege asserts)
+│   ├── 📈 performance/                     # Performance workloads
+│   └── 🛡️ resilience/                      # Backend, database, pool, and VPD scenarios
+└── 🖼️ screenshots/                         # Captured evidence from a real lab run (kind + Podman + Oracle Free)
 ```
 
 ---
@@ -383,12 +403,19 @@ rake qa:cluster:create   # kind cluster 'poc-oracle' (Podman provider)
 rake qa:image:build      # backend image via Podman (multi-stage Dockerfile)
 rake qa:image:load       # load image into the kind node (via tarball)
 rake qa:deploy           # namespace + secrets + Oracle StatefulSet + backend
-rake qa:db:init          # flyway migrate (V001–V026) + PL/SQL packages + seed
+rake qa:db:init          # flyway migrate (V001-V027) + PL/SQL packages + seed
 rake qa:wait             # until Oracle + backend rollout are Ready
 rake qa:smoke            # API health, authorization, order flow, refresh, tenant access, metrics
-rake qa:db:verify        # DB verification: 16 VPD policies + tenant isolation + order-to-payment suites
+rake qa:db:verify        # DB verification: 16 VPD policies + tenant isolation + order-to-payment + outbox relay
 rake e2e:all             # DB E01-E06 + API physical routing (backend must be up)
 ```
+
+**First boot is slow, and that is expected.** Oracle Free creates and opens the database inside the container: on a 4-vCPU host it takes ~10–11 min from `qa:deploy` until the StatefulSet reports `Ready`. Two settings exist precisely because of that:
+
+- every `db:*` task waits `QA_ORACLE_TIMEOUT` seconds (default `1200`) for Oracle; raise it on slower machines;
+- the Oracle `startupProbe` allows 20 min for the same reason — a shorter budget makes kubelet kill the container mid-creation and leave a half-built datafile set on the PVC.
+
+The backend starts before Oracle on purpose and simply reports Unready until the pool can connect; that is the fail-closed behaviour, not a crash loop.
 
 ### DB test suites (run in the Oracle pod, which ships sqlplus)
 
@@ -408,7 +435,7 @@ rake qa:db:concurrency   # QA_WORKERS=10 by default; restores stock to 100 after
 |---|---|---|
 | Backend tests | `cd backend && mvn test` | Java application tests |
 | API smoke checks | `rake qa:smoke` | Health, authentication, order flow, and tenant access |
-| Database verification | `rake qa:db:verify` | VPD policies, tenant isolation, and order-to-payment flow |
+| Database verification | `rake qa:db:verify` | VPD policies, tenant isolation, order-to-payment flow, and outbox relay |
 | End-to-end scenarios | `rake e2e:all` | Database behavior and physical PDB routing |
 | Inventory concurrency | `rake qa:db:concurrency` | Concurrent reservations against limited stock |
 
@@ -461,8 +488,43 @@ rake qa:db:concurrency   # QA_WORKERS=10 by default; restores stock to 100 after
 
 ---
 
+## 🖼️ Screenshots (real lab run)
+
+Evidence captured from a live run of this commit on the `poc-oracle` kind cluster (Podman provider, Oracle Database Free 23c, PDB_OLTP + PDB_CORP, backend image built from source).
+
+Each PNG is the raw log of the run rendered as a terminal, not a retyped transcript: the footer names the source log, and the three summarised pages state the exact filter applied. No command output was edited; `04`, `05` and `06` are line filters over the full log, so they show the verdicts and the assertions, not every `kubectl` echo.
+
+| Evidence | What it shows |
+|---|---|
+| ![Cluster](screenshots/01-cluster.png) | Oracle and backend pods Ready in `poc-oracle` |
+| ![PDBs](screenshots/02-pdbs.png) | `PDB_OLTP` and `PDB_CORP` both open READ WRITE |
+| ![VPD](screenshots/03-vpd-fail-closed.png) | All 16 VPD policies present, each on the table it guards |
+| ![DB verify](screenshots/04-db-verify.png) | Four suites pass, including the fail-closed counters: no context → 0 rows, 0 `EXEMPT ACCESS POLICY` and 0 `DELETE` grants |
+| ![Concurrency](screenshots/05-concurrency.png) | stock=1, N workers → exactly one confirmation |
+| ![Outbox](screenshots/06-outbox-relay.png) | Writer leaves the event `NEW`; the relay publishes it and the reader sees `PUBLISHED` |
+| ![API](screenshots/07-api-health.png) | Live backend health/readiness |
+
+---
+
+## ⚠️ Known limitations (by design, not bugs)
+
+- **Reporting is per PDB.** `refresh` and the MV queries act on the PDB the request routes to (decided by the tenant's tier). There is no cross-PDB aggregation: an “all tenants” report across `PDB_OLTP` and `PDB_CORP` does not exist.
+- **Concurrent duplicates of an idempotency key serialize on the unique index.** That is the documented correctness trade-off (no fast 409 for in-flight keys); under aggressive retries it holds pool connections.
+- **The outbox has no broker.** The relay drives the real state transitions, but the publish step is a no-op sink, and the batch is unordered ("up to N `NEW` rows") because Oracle cannot lock rows through the `FETCH FIRST` view.
+- **Tenant provisioning is a dual write** (shared PDB, then dedicated PDB) without 2PC. An id mismatch fails closed and a retry repairs it; there is no automatic reconciliation job.
+- **Tier is fixed at provisioning.** Changing a tenant to `ENTERPRISE` does not migrate its existing rows to `PDB_CORP`.
+- **The database is single-instance.** Oracle Database Free has no clustering layer; the repo makes no high-availability claim.
+- **Lab credentials** (`ChangeMe123!`, `LabOwnerPass1`, …) are for the `local` profile only; the `prod` profile requires environment secrets and fails fast on weak values.
+
 ---
 
 ## 📜 License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+The MIT license covers the code in this repository. It does not extend to third-party components pulled in at build or deploy time:
+
+- **Oracle Database Free 23c** and the **Oracle JDBC driver / UCP** (`ojdbc11`, `ucp`) are governed by the *Oracle Free Distribution, Hosting, and Use Terms and Conditions*, not an OSI license. Those terms allow redistributing the unmodified programs subject to carrying the license text with them; the driver jar ships its own `META-INF/license.txt`, so an image built here satisfies that condition without extra steps. The repository itself vendors neither: Maven resolves the driver, and the database image is pulled at deploy time.
+- The rest of the runtime classpath is Apache-2.0, plus `logback` (EPL-1.0 / LGPL-2.1), `jakarta.*` (EPL-2.0 or GPL-2.0 + Classpath Exception) and `LatencyUtils` (CC0). There is no AGPL, and nothing in that set imposes a copyleft obligation on this MIT code.
+- The base runtime image is Temurin (GPL-2.0 + Classpath Exception), used unmodified.
+- The passwords in `.env.example`, the Rakefile defaults and the seed data are documented **demo values**, not secrets. The `prod` profile refuses weak values and takes them from the environment.

@@ -12,6 +12,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -97,6 +99,39 @@ class IdempotentOperationExecutorTest {
         verify(action, never()).get();
         verify(orderRepository, never()).findById(anyLong(), anyLong());
         verify(idempotencyStore, never()).insertPending(anyLong(), anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    void shouldRejectReplayOfExpiredCompletedRecord() throws Exception {
+        // A COMPLETED row past the replay window is a historical snapshot:
+        // replaying it would report a state the aggregate may have left
+        // (e.g. "confirmed" for an order cancelled weeks ago).
+        String payload = objectMapper.writeValueAsString(mockResponse);
+        var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "COMPLETED",
+                payload, FP, Instant.now().minus(Duration.ofDays(31)));
+        when(idempotencyStore.findByKey(TENANT_ID, "expired-key")).thenReturn(Optional.of(record));
+
+        Supplier<OrderBO> action = mock(Supplier.class);
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> executor.execute(TENANT_ID, "expired-key", "CONFIRM_ORDER", ORDER_ID, FP, action));
+
+        assertEquals("IDEMPOTENCY_KEY_EXPIRED", ex.getCode());
+        assertEquals(410, GlobalExceptionHandler.statusFor(ex.getCode()).value());
+        verify(action, never()).get();
+    }
+
+    @Test
+    void shouldReplayCompletedRecordInsideReplayWindow() throws Exception {
+        String payload = objectMapper.writeValueAsString(mockResponse);
+        var record = new IdempotencyStore.IdempotencyRecord(ORDER_ID, "CONFIRM_ORDER", "COMPLETED",
+                payload, FP, Instant.now().minus(Duration.ofDays(1)));
+        when(idempotencyStore.findByKey(TENANT_ID, "recent-key")).thenReturn(Optional.of(record));
+
+        Supplier<OrderBO> action = mock(Supplier.class);
+        OrderBO result = executor.execute(TENANT_ID, "recent-key", "CONFIRM_ORDER", ORDER_ID, FP, action);
+
+        assertEquals(ORDER_ID, result.orderId());
+        verify(action, never()).get();
     }
 
     @Test

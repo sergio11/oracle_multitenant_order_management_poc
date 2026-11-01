@@ -16,6 +16,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_tenant AS
         p_isolation_mode IN VARCHAR2 DEFAULT 'SHARED_SCHEMA'
     ) RETURN NUMBER IS
         v_tenant_id NUMBER;
+        v_isolation_mode tenant.isolation_mode%TYPE;
         v_code_conflict EXCEPTION;
         PRAGMA EXCEPTION_INIT(v_code_conflict, -20001);
     BEGIN
@@ -29,9 +30,17 @@ CREATE OR REPLACE PACKAGE BODY pkg_tenant AS
             RAISE_APPLICATION_ERROR(-20003, 'Invalid ISOLATION_MODE.');
         END IF;
 
+        -- TIER is the single source of truth (routing reads TIER). Keep
+        -- ISOLATION_MODE coherent instead of storing a contradiction:
+        -- ENTERPRISE tenants are physically isolated in the dedicated PDB.
+        v_isolation_mode := CASE
+            WHEN p_tier = 'ENTERPRISE' THEN 'DEDICATED_PDB'
+            ELSE p_isolation_mode
+        END;
+
         BEGIN
             INSERT INTO tenant (tenant_code, name, tier, status, isolation_mode)
-            VALUES (p_tenant_code, p_name, p_tier, 'ACTIVE', p_isolation_mode)
+            VALUES (p_tenant_code, p_name, p_tier, 'ACTIVE', v_isolation_mode)
             RETURNING tenant_id INTO v_tenant_id;
         EXCEPTION
             WHEN DUP_VAL_ON_INDEX THEN
@@ -87,9 +96,39 @@ CREATE OR REPLACE PACKAGE BODY pkg_tenant AS
     -- set_tenant_context
     -- Sets APP_CTX.TENANT_ID for the current session.
     -- VPD policies read SYS_CONTEXT('APP_CTX','TENANT_ID') (SRS 14).
+    --
+    -- SECURITY BOUNDARY (documented honestly): VPD removes the
+    -- "forgotten WHERE clause" class of leak. It does NOT make the
+    -- database resistant to arbitrary SQL execution: any session that
+    -- can call this procedure can select another tenant. The real
+    -- principal <-> tenant binding lives in the application boundary
+    -- (TenantContextFilter). What this validation adds is that the
+    -- context can only name a tenant that exists and is ACTIVE, so a
+    -- stale/suspended/typo id fails loudly instead of silently reading
+    -- an empty result set.
     --=================================================================
     PROCEDURE set_tenant_context(p_tenant_id IN NUMBER) IS
+        v_status tenant.status%TYPE;
     BEGIN
+        IF p_tenant_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20005, 'Tenant context requires a tenant id.');
+        END IF;
+
+        BEGIN
+            SELECT status INTO v_status
+              FROM tenant
+             WHERE tenant_id = p_tenant_id;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                RAISE_APPLICATION_ERROR(-20005,
+                    'Unknown tenant id for session context: ' || p_tenant_id);
+        END;
+
+        IF v_status <> 'ACTIVE' THEN
+            RAISE_APPLICATION_ERROR(-20005,
+                'Tenant ' || p_tenant_id || ' is not ACTIVE (' || v_status || ')');
+        END IF;
+
         DBMS_SESSION.SET_CONTEXT(
             namespace => 'APP_CTX',
             attribute => 'TENANT_ID',

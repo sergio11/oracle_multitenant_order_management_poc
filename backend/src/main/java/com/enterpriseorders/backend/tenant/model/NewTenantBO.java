@@ -22,5 +22,14 @@ public record NewTenantBO(
 ) {
     public NewTenantBO {
         tenantCode = tenantCode == null ? null : tenantCode.trim().toUpperCase();
+        // TIER is the single source of truth for physical isolation
+        // (TenantRoutingDataSource routes on it). Derive ISOLATION_MODE
+        // here so the DTO default can never persist a contradiction such
+        // as tier=ENTERPRISE + isolation_mode=SHARED_SCHEMA.
+        if ("ENTERPRISE".equalsIgnoreCase(tier)) {
+            isolationMode = "DEDICATED_PDB";
+        } else if (isolationMode == null || isolationMode.isBlank()) {
+            isolationMode = "SHARED_SCHEMA";
+        }
     }
 }

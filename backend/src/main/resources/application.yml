@@ -47,6 +47,19 @@ app:
   reporting:
     # Seconds between MV refreshes (single-JVM; see RefreshRateLimiter).
     refresh-cooldown-seconds: 60
+  # Cross-tenant maintenance jobs (outbox relay + idempotency retention).
+  # Disabled by default so unit tests never open a maintenance connection;
+  # the lab enables it explicitly (k8s deployment env).
+  maintenance:
+    enabled: ${APP_MAINTENANCE_ENABLED:false}
+    initial-delay-ms: 20000
+    outbox-interval-ms: 30000
+    outbox-batch-size: 100
+    idempotency-purge-interval-ms: 3600000
+  idempotency:
+    # Replay window: COMPLETED keys older than this are not replayed
+    # (410 IDEMPOTENCY_KEY_EXPIRED) and are purged by the maintenance job.
+    retention-days: ${APP_IDEMPOTENCY_RETENTION_DAYS:30}
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD:changeme}

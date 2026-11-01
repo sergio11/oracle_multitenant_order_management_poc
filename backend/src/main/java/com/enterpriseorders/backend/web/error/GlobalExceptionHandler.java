@@ -87,6 +87,13 @@ public class GlobalExceptionHandler {
             Map.entry("IDEMPOTENCY_IN_PROGRESS", HttpStatus.CONFLICT),
             Map.entry("IDEMPOTENCY_PAYLOAD_MISSING", HttpStatus.INTERNAL_SERVER_ERROR),
             Map.entry("IDEMPOTENCY_KEY_CONFLICT", HttpStatus.CONFLICT),
+            Map.entry("IDEMPOTENCY_KEY_EXPIRED", HttpStatus.GONE),
+            Map.entry("TENANT_CONTEXT_REJECTED", HttpStatus.FORBIDDEN),
+            Map.entry("NO_ACTIVE_WAREHOUSE", HttpStatus.CONFLICT),
+            Map.entry("CONCURRENT_MODIFICATION", HttpStatus.CONFLICT),
+            Map.entry("LOCK_TIMEOUT", HttpStatus.CONFLICT),
+            Map.entry("INVALID_RELAY_BATCH_SIZE", HttpStatus.BAD_REQUEST),
+            Map.entry("INVALID_RETENTION_DAYS", HttpStatus.BAD_REQUEST),
             Map.entry("INVALID_LIMIT", HttpStatus.BAD_REQUEST));
 
     /**

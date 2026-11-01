@@ -37,6 +37,18 @@ class TenantServiceTest {
     }
 
     @Test
+    void shouldDeriveIsolationModeFromTier() {
+        // TIER is the single source of truth for routing; ISOLATION_MODE
+        // must never contradict it (V027 CHECK constraint enforces the same
+        // invariant in the database).
+        var enterprise = new NewTenantBO("INITECH", "Initech", "ENTERPRISE", "SHARED_SCHEMA");
+        assertEquals("DEDICATED_PDB", enterprise.isolationMode());
+
+        var standard = new NewTenantBO("ACME", "Acme", "STANDARD", null);
+        assertEquals("SHARED_SCHEMA", standard.isolationMode());
+    }
+
+    @Test
     void shouldFailClosedWhenDedicatedProvisioningDisagrees() {
         var request = new NewTenantBO("ACME", "Acme Corp", "ENTERPRISE", "SHARED_SCHEMA");
         when(tenantRepository.create(request)).thenReturn(1L);

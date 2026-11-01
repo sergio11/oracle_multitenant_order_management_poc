@@ -53,12 +53,19 @@ spec:
             - name: oracle-init
               mountPath: /container-entrypoint-initdb.d
               readOnly: true
-          # First boot (DB create + PDB + init scripts) can take several minutes.
+          # First boot (DB create + PDB + init scripts) can take several
+          # minutes. Measured on this lab host (4 vCPU Podman VM): ~10 min
+          # from pod start to OPEN, which is exactly the old budget
+          # (40 x 15s). A timeout here is not a slow pod, it is a killed
+          # container in the middle of database creation, leaving a
+          # half-built datafile set on the PVC. Budget 20 min instead:
+          # the probe only gates startup, so a generous threshold costs
+          # nothing on a healthy boot.
           startupProbe:
             exec:
               command: ["healthcheck.sh"]
             periodSeconds: 15
-            failureThreshold: 40
+            failureThreshold: 80
             timeoutSeconds: 10
           readinessProbe:
             exec:

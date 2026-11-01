@@ -7,8 +7,12 @@ import com.enterpriseorders.backend.order.port.output.IdempotencyStore.Idempoten
 import com.enterpriseorders.backend.order.port.output.OrderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.function.Supplier;
 
@@ -20,9 +24,15 @@ import java.util.function.Supplier;
  * replay of the original response on retry.
  *
  * Status handling of an existing record:
- *  - COMPLETED  -> return the stored response payload (no re-execution);
- *                  rows without payload fall back to findById (legacy rows
- *                  and responses too large for response_payload).
+ *  - COMPLETED  -> return the stored response payload (no re-execution),
+ *                  unless the record is older than the replay window
+ *                  (app.idempotency.retention-days): then the stored
+ *                  response is a historical snapshot and replaying it
+ *                  would report a state the aggregate may have left
+ *                  (e.g. "confirmed" for an order cancelled weeks ago),
+ *                  so it is a hard 410 IDEMPOTENCY_KEY_EXPIRED. Rows
+ *                  without payload fall back to findById (legacy rows and
+ *                  responses too large for response_payload).
  *  - PENDING    -> another request is in flight -> 409 IDEMPOTENCY_IN_PROGRESS.
  *  - FAILED     -> previous attempt rolled back; retry re-executes the action
  *                  and overwrites the row (FAILED is never written by this
@@ -56,13 +66,24 @@ public class IdempotentOperationExecutor {
     private final IdempotencyStore idempotencyStore;
     private final OrderRepository orderRepository;
     private final ObjectMapper objectMapper;
+    private final long retentionDays;
 
+    @Autowired
     public IdempotentOperationExecutor(IdempotencyStore idempotencyStore,
                                        OrderRepository orderRepository,
-                                       ObjectMapper objectMapper) {
+                                       ObjectMapper objectMapper,
+                                       @Value("${app.idempotency.retention-days:30}") long retentionDays) {
         this.idempotencyStore = idempotencyStore;
         this.orderRepository = orderRepository;
         this.objectMapper = objectMapper;
+        this.retentionDays = retentionDays;
+    }
+
+    /** Convenience constructor for unit tests (default replay window). */
+    public IdempotentOperationExecutor(IdempotencyStore idempotencyStore,
+                                       OrderRepository orderRepository,
+                                       ObjectMapper objectMapper) {
+        this(idempotencyStore, orderRepository, objectMapper, 30);
     }
 
     public OrderBO execute(Long tenantId, String idempotencyKey, String operation,
@@ -105,6 +126,11 @@ public class IdempotentOperationExecutor {
                                    Supplier<OrderBO> action) {
         validateKeyMatches(record, idempotencyKey, operation, aggregateId, requestFingerprint);
         if ("COMPLETED".equals(record.status())) {
+            if (isExpired(record)) {
+                throw new BusinessException("IDEMPOTENCY_KEY_EXPIRED",
+                        "Idempotency key has expired (retention window is "
+                                + retentionDays + " days); use a new key");
+            }
             return replay(tenantId, record);
         }
         if ("FAILED".equals(record.status())) {
@@ -161,6 +187,15 @@ public class IdempotentOperationExecutor {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize idempotent response", e);
         }
+    }
+
+    /**
+     * A record without createdAt (legacy row or a test double) is never
+     * treated as expired: absence of evidence is not expiry.
+     */
+    private boolean isExpired(IdempotencyRecord record) {
+        return record.createdAt() != null
+                && record.createdAt().isBefore(Instant.now().minus(Duration.ofDays(retentionDays)));
     }
 
     private void validateKeyMatches(IdempotencyRecord record, String idempotencyKey,

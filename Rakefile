@@ -58,6 +58,16 @@ DEDICATED_SID      = ENV.fetch('QA_ORACLE_DEDICATED_SERVICE', 'pdb_corp')
 PROVISION_SERVICES = [ORACLE_SID, DEDICATED_SID].uniq.freeze
 SECRETS_NAME = 'poc-oracle-secrets'
 
+# How long every DB task waits for Oracle to be Ready before giving up.
+# First boot on this lab host (4 vCPU Podman VM, Oracle Free 23c) measures
+# ~10-11 min from pod start to OPEN: the entrypoint seeds the database on
+# the PVC, starts the instance and only then registers the service with
+# the listener. The previous hard-coded 600s was BELOW that, so a cold
+# `rake qa:up` failed on the first `db:*` task and every following task
+# repeated the same doomed wait. 1200s covers a cold host; set
+# QA_ORACLE_TIMEOUT on slower machines.
+ORACLE_READY_TIMEOUT = Integer(ENV.fetch('QA_ORACLE_TIMEOUT', '1200'))
+
 # LAB-ONLY defaults (documented demo credentials, never real secrets).
 # Fallback used only when infrastructure/podman/.env is absent (a warn
 # is printed). Keep in sync with .env.example AND with the DEFINE
@@ -516,7 +526,12 @@ namespace :qa do
     desc 'Build the backend image with Podman (multi-stage Dockerfile)'
     task :build do
       abort 'podman not found on PATH' unless which?('podman')
-      run!('podman', 'build', '-t', IMAGE, '.', chdir: BACKEND_DIR)
+      # --format docker: this Podman defaults to the OCI image format, and
+      # OCI silently DROPS the Dockerfile HEALTHCHECK ("not supported for
+      # OCI image format and will be ignored"). The image would then claim a
+      # healthcheck it does not carry. Docker format keeps it (k8s uses its
+      # own probes, but `podman run` reports health correctly).
+      run!('podman', 'build', '--format', 'docker', '-t', IMAGE, '.', chdir: BACKEND_DIR)
     end
 
     desc "Load the backend image into kind cluster '#{CLUSTER_NAME}'"
@@ -551,7 +566,7 @@ namespace :qa do
   task :wait do
     ensure_cluster!
     puts 'Waiting for Oracle (first boot can take several minutes)...'
-    wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+    wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
     # NOTE: rollout status, not just readyReplicas - during a rolling
     # update the OLD pod stays Ready and replica counts lie, routing
     # smoke tests to stale code.
@@ -585,11 +600,11 @@ namespace :qa do
       end
     end
 
-    desc 'Run Flyway migrations (V001-V026) on every provisioned PDB (shared + dedicated)'
+    desc 'Run Flyway migrations (V001-V027) on every provisioned PDB (shared + dedicated)'
     task :migrate do
       ensure_cluster!
       puts 'Waiting for Oracle before migrate...'
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
       puts
       PROVISION_SERVICES.each do |service|
         flyway_run!(:migrate, service: service)
@@ -600,7 +615,7 @@ namespace :qa do
     desc 'Deploy PL/SQL packages (specs then bodies) on every provisioned PDB'
     task :packages do
       ensure_cluster!
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
       PROVISION_SERVICES.each { |service| run_packages_deploy!(service: service) }
       puts 'PL/SQL packages deployed.'
     end
@@ -611,7 +626,7 @@ namespace :qa do
       seed = File.join(ROOT, 'database', 'seed', 'R__seed_data.sql')
       abort "Missing #{seed}" unless File.exist?(seed)
 
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
       PROVISION_SERVICES.each do |service|
         run_sql_as_owner!(seed, label: "seed[#{service}]", service: service)
       end
@@ -630,7 +645,7 @@ namespace :qa do
       opass = env['APP_OWNER_PWD']
       ruser = env['APP_RUNTIME_USER']
       rpass = env['APP_RUNTIME_PWD']
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
 
       conc_dir = File.join(ROOT, 'tests', 'concurrency')
       %w[C_setup_stock.sql C_concurrent_orders_worker.sql C_assert_results.sql].each do |f|
@@ -734,7 +749,7 @@ namespace :qa do
     task :'verify-vpd' do
       ensure_cluster!
       env = load_env_file
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
       script = File.join(ROOT, 'database', 'security', 'verify_vpd_policies.sql')
       abort "Missing #{script}" unless File.exist?(script)
       cp_to_pod!(script, '/tmp/verify_vpd_policies.sql')
@@ -748,7 +763,7 @@ namespace :qa do
     task :security do
       ensure_cluster!
       env = load_env_file
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
       script = File.join(ROOT, 'tests', 'security', 'T_security_tenant_isolation.sql')
       abort "Missing #{script}" unless File.exist?(script)
       cp_to_pod!(script, '/tmp/T_security_tenant_isolation.sql')
@@ -761,7 +776,7 @@ namespace :qa do
     task :it do
       ensure_cluster!
       env = load_env_file
-      wait_for!("oracle ready (#{NAMESPACE})", 600) { oracle_ready? }
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
       script = File.join(ROOT, 'tests', 'integration', 'IT_order_to_payment.sql')
       abort "Missing #{script}" unless File.exist?(script)
       cp_to_pod!(script, '/tmp/IT_order_to_payment.sql')
@@ -806,9 +821,42 @@ namespace :qa do
       end
     end
 
-    desc 'verify-vpd + security + it (full DB verification)'
-    task :verify => ['qa:db:verify-vpd', 'qa:db:security', 'qa:db:it'] do
-      puts 'DB VERIFICATION PASSED (verify-vpd + security + it).'
+    desc 'Outbox relay suite IT_outbox_relay.sql (APP_RUNTIME)'
+    task :outbox do
+      ensure_cluster!
+      env = load_env_file
+      wait_for!("oracle ready (#{NAMESPACE})", ORACLE_READY_TIMEOUT) { oracle_ready? }
+      script = File.join(ROOT, 'tests', 'integration', 'IT_outbox_relay.sql')
+      abort "Missing #{script}" unless File.exist?(script)
+      cp_to_pod!(script, '/tmp/IT_outbox_relay.sql')
+      out = run_sql_suite_in_pod!('/tmp/IT_outbox_relay.sql', [],
+                                  env['APP_RUNTIME_USER'], env['APP_RUNTIME_PWD'],
+                                  'outbox', '=== IT: outbox relay PASSED ===')
+      oid = out[/Created order_id=(\d+)/, 1]
+      if oid
+        sql_via_pod!(<<~SQL, env['APP_OWNER_USER'], env['APP_OWNER_PWD'], 'outbox-owner-cleanup')
+          WHENEVER SQLERROR EXIT SQL.SQLCODE
+          SET SERVEROUTPUT ON
+          VARIABLE v_t NUMBER
+          BEGIN SELECT tenant_id INTO :v_t FROM tenant WHERE tenant_code = 'ACME'; END;
+          /
+          DELETE FROM outbox_event WHERE tenant_id = :v_t AND aggregate_type = 'SALES_ORDER'
+            AND aggregate_id = '#{oid}';
+          DELETE FROM audit_event WHERE tenant_id = :v_t AND entity_type = 'SALES_ORDER'
+            AND entity_id = '#{oid}';
+          DELETE FROM order_status_history WHERE tenant_id = :v_t AND order_id = #{oid};
+          DELETE FROM sales_order_line WHERE tenant_id = :v_t AND order_id = #{oid};
+          DELETE FROM sales_order WHERE tenant_id = :v_t AND order_id = #{oid};
+          COMMIT;
+          PROMPT Outbox owner-cleanup OK
+          EXIT SUCCESS
+        SQL
+      end
+    end
+
+    desc 'verify-vpd + security + it + outbox (full DB verification)'
+    task :verify => ['qa:db:verify-vpd', 'qa:db:security', 'qa:db:it', 'qa:db:outbox'] do
+      puts 'DB VERIFICATION PASSED (verify-vpd + security + it + outbox).'
     end
 
     namespace :rman do
@@ -1251,11 +1299,11 @@ namespace :e2e do
   end
 
   def run_e2e_test(id, name, conn, script_name)
-    puts "\n#{'─' * 70}"
+    puts "\n#{'â”€' * 70}"
     puts "  RUNNING: [#{id}] #{name}"
-    puts "#{'─' * 70}"
+    puts "#{'â”€' * 70}"
     ok = sqlplus_in_pod(conn, script_name)
-    puts ok ? "  ✅ PASSED" : "  ❌ FAILED"
+    puts ok ? "  âœ… PASSED" : "  âŒ FAILED"
     result = ok ? :pass : :fail
     $e2e_results[id] = result
     result
@@ -1507,14 +1555,14 @@ namespace :e2e do
   ] do
     passed  = $e2e_results.count { |_, v| v == :pass }
     failed  = $e2e_results.select { |_, v| v == :fail }.keys
-    puts "\n#{'═' * 70}"
+    puts "\n#{'â•' * 70}"
     if failed.empty? && passed == $e2e_results.size && !passed.zero?
-      puts "  ✅ E2E suite: #{passed}/#{$e2e_results.size} passed."
-      puts "#{'═' * 70}"
+      puts "  âœ… E2E suite: #{passed}/#{$e2e_results.size} passed."
+      puts "#{'â•' * 70}"
     else
-      puts "  ❌ E2E suite: #{passed} passed, #{failed.size} failed" \
+      puts "  âŒ E2E suite: #{passed} passed, #{failed.size} failed" \
            "#{failed.empty? ? '' : " (#{failed.join(', ')})"}."
-      puts "#{'═' * 70}"
+      puts "#{'â•' * 70}"
       abort 'E2E suite failed'
     end
   end

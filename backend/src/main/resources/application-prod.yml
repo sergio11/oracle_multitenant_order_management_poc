@@ -29,6 +29,15 @@ oracle:
 # (missing/short/<12/"changeme") additionally abort via
 # CredentialHardeningCheck.
 app:
+  maintenance:
+    # Cross-tenant relay/retention are operational in prod.
+    enabled: ${APP_MAINTENANCE_ENABLED:true}
+    initial-delay-ms: 20000
+    outbox-interval-ms: 30000
+    outbox-batch-size: 100
+    idempotency-purge-interval-ms: 3600000
+  idempotency:
+    retention-days: ${APP_IDEMPOTENCY_RETENTION_DAYS:30}
   security:
     admin:
       password: ${APP_ADMIN_PASSWORD}

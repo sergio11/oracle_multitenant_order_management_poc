@@ -50,13 +50,17 @@ CREATE OR REPLACE PACKAGE BODY pkg_inventory AS
         END IF;
 
         -- Lock the inventory row for this tenant/warehouse/product.
+        -- WAIT 5: contention must surface as an actionable lock timeout
+        -- (ORA-30006 -> 409) instead of blocking the request thread and
+        -- the connection pool indefinitely. Ordering by product_id in the
+        -- caller keeps the lock order deterministic and deadlocks rare.
         SELECT inventory_id, available_quantity
           INTO v_inventory_id, v_available
           FROM inventory
          WHERE tenant_id    = p_tenant_id
            AND warehouse_id = p_warehouse_id
            AND product_id   = p_product_id
-           FOR UPDATE;
+           FOR UPDATE WAIT 5;
 
         -- Guard against overselling (SRS 31, FR-010).
         IF v_available < p_quantity THEN
@@ -98,7 +102,7 @@ CREATE OR REPLACE PACKAGE BODY pkg_inventory AS
          WHERE tenant_id    = p_tenant_id
            AND warehouse_id = p_warehouse_id
            AND product_id   = p_product_id
-           FOR UPDATE;
+           FOR UPDATE WAIT 5;
 
         IF v_reserved < p_quantity THEN
             RAISE_APPLICATION_ERROR(-20014, 'Reserved quantity insufficient for release.');

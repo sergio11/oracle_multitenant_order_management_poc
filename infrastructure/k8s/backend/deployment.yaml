@@ -63,6 +63,10 @@ spec:
                 secretKeyRef:
                   name: poc-oracle-secrets
                   key: APP_OPERATOR_PASSWORD
+            # Lab runs the maintenance jobs so the outbox relay and the
+            # idempotency retention purge are observable end to end.
+            - name: APP_MAINTENANCE_ENABLED
+              value: "true"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

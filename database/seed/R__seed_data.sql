@@ -40,7 +40,9 @@ USING (SELECT code, name, tier
 ON (t.tenant_code = s.code)
 WHEN NOT MATCHED THEN
     INSERT (tenant_code, name, tier, status, isolation_mode)
-    VALUES (s.code, s.name, s.tier, 'ACTIVE', 'SHARED_SCHEMA');
+    VALUES (s.code, s.name, s.tier, 'ACTIVE',
+            CASE WHEN s.tier = 'ENTERPRISE' THEN 'DEDICATED_PDB'
+                 ELSE 'SHARED_SCHEMA' END);
 
 --=====================================================================
 -- ACME data

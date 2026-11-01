@@ -19,6 +19,7 @@ public final class PlsqlErrorMapper {
         Map.entry("ORA-20002", new ErrorMapping("INVALID_TIER", "Invalid tier value")),
         Map.entry("ORA-20003", new ErrorMapping("INVALID_ISOLATION_MODE", "Invalid isolation mode")),
         Map.entry("ORA-20004", new ErrorMapping("TENANT_NOT_FOUND", "Tenant not found")),
+        Map.entry("ORA-20005", new ErrorMapping("TENANT_CONTEXT_REJECTED", "Tenant context rejected: unknown or inactive tenant")),
         Map.entry("ORA-20010", new ErrorMapping("INVALID_QUANTITY", "Reservation quantity must be positive")),
         Map.entry("ORA-20011", new ErrorMapping("INSUFFICIENT_INVENTORY", "Insufficient inventory for product")),
         Map.entry("ORA-20012", new ErrorMapping("INVENTORY_NOT_FOUND", "Inventory row not found")),
@@ -41,7 +42,14 @@ public final class PlsqlErrorMapper {
         Map.entry("ORA-20034", new ErrorMapping("ORDER_SHIPPED_NOT_CANCELLABLE", "Cannot cancel a shipped order")),
         Map.entry("ORA-20035", new ErrorMapping("PAYMENT_AMOUNT_MISMATCH", "Payment amount does not match order total")),
         Map.entry("ORA-20036", new ErrorMapping("INVALID_QUANTITY", "Quantity must be greater than zero")),
-        Map.entry("ORA-20038", new ErrorMapping("STATUS_TRANSITION_CONFLICT", "Status transition failed: order not found or modified concurrently"))
+        Map.entry("ORA-20037", new ErrorMapping("NO_ACTIVE_WAREHOUSE", "No ACTIVE warehouse configured for this tenant")),
+        Map.entry("ORA-20038", new ErrorMapping("STATUS_TRANSITION_CONFLICT", "Status transition failed: order not found or modified concurrently")),
+        Map.entry("ORA-20039", new ErrorMapping("INVALID_RELAY_BATCH_SIZE", "Outbox relay batch size must be positive")),
+        Map.entry("ORA-20040", new ErrorMapping("INVALID_RETENTION_DAYS", "Idempotency retention must be at least 1 day")),
+        // Infrastructure-level contention, mapped so a saturated row lock
+        // surfaces as an actionable 409 instead of a generic 500.
+        Map.entry("ORA-00060", new ErrorMapping("CONCURRENT_MODIFICATION", "Deadlock detected; retry the operation")),
+        Map.entry("ORA-30006", new ErrorMapping("LOCK_TIMEOUT", "Timed out waiting for a row lock; retry the operation"))
     );
 
     private PlsqlErrorMapper() {
@@ -54,6 +62,14 @@ public final class PlsqlErrorMapper {
      */
     public static RuntimeException map(SQLException ex) {
         int vendorCode = ex.getErrorCode();
+        if (vendorCode == 60 || vendorCode == 30006) {
+            // Deadlock / lock timeout: vendor codes outside the 20xxx band,
+            // but still functional outcomes the caller can retry.
+            ErrorMapping mapping = ORA_MAPPINGS.get("ORA-" + String.format("%05d", vendorCode));
+            if (mapping != null) {
+                return new BusinessException(mapping.code(), mapping.message());
+            }
+        }
         if (vendorCode >= 20000 && vendorCode <= 20999) {
             ErrorMapping mapping = ORA_MAPPINGS.get("ORA-" + vendorCode);
             if (mapping != null) {

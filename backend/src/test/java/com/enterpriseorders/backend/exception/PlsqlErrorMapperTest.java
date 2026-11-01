@@ -137,4 +137,28 @@ class PlsqlErrorMapperTest {
         assertBusinessCode(PlsqlErrorMapper.map(ora(20038, "Status transition failed")),
                 "STATUS_TRANSITION_CONFLICT", 409);
     }
+
+    @Test
+    void shouldMapOra20005ToTenantContextRejected() {
+        assertBusinessCode(PlsqlErrorMapper.map(ora(20005, "Unknown tenant id for session context")),
+                "TENANT_CONTEXT_REJECTED", 403);
+    }
+
+    @Test
+    void shouldMapOra20037ToNoActiveWarehouse() {
+        assertBusinessCode(PlsqlErrorMapper.map(ora(20037, "No ACTIVE warehouse configured")),
+                "NO_ACTIVE_WAREHOUSE", 409);
+    }
+
+    @Test
+    void shouldMapOra00060ToConcurrentModification() {
+        assertBusinessCode(PlsqlErrorMapper.map(ora(60, "deadlock detected while waiting for resource")),
+                "CONCURRENT_MODIFICATION", 409);
+    }
+
+    @Test
+    void shouldMapOra30006ToLockTimeout() {
+        assertBusinessCode(PlsqlErrorMapper.map(ora(30006, "resource busy or locked, timeout")),
+                "LOCK_TIMEOUT", 409);
+    }
 }
